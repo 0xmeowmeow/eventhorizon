@@ -79,6 +79,8 @@ sphinx-autoapi = ">=3.4.0,<4"
 [tool.pixi.feature.test.dependencies]
 pytest = ">=8.3.4,<9"
 coverage = ">=7.6.12,<8"
+[tool.pixi.feature.test.pypi-dependencies]
+luminet = { path = ".", editable = true }
 
 [tool.pixi.feature.docs.pypi-dependencies]
 catppuccin = { version = ">=2.3.4, <3", extras = ["pygments"] }
