@@ -217,35 +217,14 @@ class BlackHole:
 
         # calc ghost images
         with Pool() as pool:
-            isoradials = pool.starmap(
-                Isoradial,
-                [
-                    (
-                        r,
-                        self.incl,
-                        self.mass,
-                        1,
-                        self.angular_resolution,
-                    )
-                    for r in ghost_r
-                ],
+            args = (
+                # ghost isoradials
+                [   (r, self.incl, self.mass, 1, self.angular_resolution) for r in ghost_r  ]
+                # direct isoradials
+                + [ (r, self.incl, self.mass, 0, self.angular_resolution) for r in direct_r ]
             )
-        self.isoradials.extend(isoradials)
+            isoradials = pool.starmap(Isoradial, args)
 
-        with Pool() as pool:
-            isoradials = pool.starmap(
-                Isoradial,
-                [
-                    (
-                        r,
-                        self.incl,
-                        self.mass,
-                        0,
-                        self.angular_resolution,
-                    )
-                    for r in direct_r
-                ],
-            )
         self.isoradials.extend(isoradials)
         self.isoradials.sort(key=lambda x: (1 - x.order, x.radius))
 
