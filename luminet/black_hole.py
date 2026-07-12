@@ -479,21 +479,13 @@ class BlackHole:
         min_radius_ = self.disk_inner_edge
         max_radius_ = self.disk_outer_edge
         with Pool() as p:
-            photons = p.starmap(
-                sample_photon,
-                [
-                    (min_radius_, max_radius_, self.incl, self.mass, 0)
-                    for _ in range(n_points)
-                ],
+            args = (
+                [   (min_radius_, max_radius_, self.incl, self.mass, 0) for _ in range(n_points) ]
+                + [ (min_radius_, max_radius_, self.incl, self.mass, 1) for _ in range(n_points) ]
             )
-        with Pool() as p:
-            ghost_photons = p.starmap(
-                sample_photon,
-                [
-                    (min_radius_, max_radius_, self.incl, self.mass, 1)
-                    for _ in range(n_points)
-                ],
-            )
+            results = p.starmap(sample_photon, args)
+
+        photons, ghost_photons = results[:n_points], results[n_points:]
 
         # Convert lists of Photon to numpy arrays for fast vectorized computation
         def compute_properties(photon_list: List[Photon]):
