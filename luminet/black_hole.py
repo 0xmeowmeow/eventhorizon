@@ -14,6 +14,9 @@ from luminet.isoradial import Isoradial
 from luminet.isoredshift import Isoredshift
 from luminet.photon import Photon
 
+DEFAULT_RADIAL_RESOLUTION = 200
+DEFAULT_ANGULAR_RESOLUTION = 200
+
 
 class BlackHole:
     """Black hole class for calculating and visualizing a Swarzschild black hole.
@@ -25,8 +28,9 @@ class BlackHole:
             incl=1.4, 
             acc=1.0, 
             outer_edge=None,
-            angular_resolution=200,
-            radial_resolution=200
+            angular_resolution=DEFAULT_ANGULAR_RESOLUTION,
+            radial_resolution=None,
+            density=None
     ):
         """
         Args:
@@ -34,6 +38,8 @@ class BlackHole:
             incl (float): Inclination of the observer's plane in radians
             acc (float): Accretion rate in natural units
         """
+        assert not (density is not None and radial_resolution is not None),\
+            "Radial resolution is inferred from the density profile. Pass either one, not both."
         self.incl = incl
         """float: Inclination angle of the observer"""
         self.mass = mass
@@ -46,9 +52,10 @@ class BlackHole:
         r"""float: critical impact parameter for the photon sphere :math:`3 \sqrt{3} M`"""
         self.angular_resolution = angular_resolution
         """int: Angular resolution to use when calculating or plotting the black hole or related properties. Default is 200."""
+        self.density = density / max(density)
+        """Density of the accretion disk. Will be converted to an opacity during plotting"""
         self.radial_resolution = radial_resolution
         """int: Radial resolution to use when calculating or plotting the black hole or related properties. Default is 200."""
-
 
         self.isoradial_template = partial(
             Isoradial,
@@ -111,6 +118,27 @@ class BlackHole:
     def _calc_apparent_inner_edge(self, angle):
         """Get the apparent inner edge of the accretion disk at some angle"""
         return self.disk_apparent_inner_edge.get_b_from_angle(angle)
+
+    def _get_radial_resolution(self):
+        """Get the radial resolution of the black hole to be plotted, based on either
+        the user-given radial resolution, or the density
+        
+        """
+        if self.density is not None and self.radial_resolution is not None:
+            raise UserWarning(
+                "The radial resolution is passed explicitly, but density is also given. " +\
+                "I will ignore density. " +\
+                "If you want to use this density profile, do not pass radial_resolution manually."
+                )
+
+        if self.radial_resolution is not None:
+            return self.radial_resolution
+
+        elif self.density is not None:
+            assert len(self.density.shape) == 1, "Density must be 1D array"
+            return self.density.shape[0]
+        
+        else: return DEFAULT_RADIAL_RESOLUTION
 
     def _get_fig_ax(self, polar=True) -> Tuple[Figure, Axes]:
         """Fetch a figure set up for plotting black holes and associated attributes.
@@ -190,7 +218,7 @@ class BlackHole:
         # Don't recalculate isoredshifts that have already been calculated
         redshifts = [z for z in redshifts if z not in [irz.redshift for irz in self.isoredshifts]]
 
-        radii = np.linspace(self.disk_inner_edge, self.disk_outer_edge, self.radial_resolution)
+        radii = np.linspace(self.disk_inner_edge, self.disk_outer_edge, self._get_radial_resolution())
         if order == 0: self.calc_isoradials(direct_r=radii, ghost_r=[])
         elif order == 1: self.calc_isoradials(direct_r=[], ghost_r=radii)
         else: raise ValueError("Orders other than 0 (direct) or 1 (ghost) are not supported yet.")
@@ -198,7 +226,9 @@ class BlackHole:
         for z in redshifts: self._calc_isoredshift(z, order=order)
 
     def calc_isoradials(
-        self, direct_r: List[int | float], ghost_r: List[int | float]
+        self, 
+        direct_r: List[int | float], 
+        ghost_r: List[int | float],
     ) -> List[Isoradial]:
         """Calculate isoradials for a list of radii for the direct image and/or ghost image.
 
@@ -215,14 +245,17 @@ class BlackHole:
         direct_r = [r for r in direct_r if not self._is_ir_calculated(r, order=0)]
         ghost_r = [r for r in ghost_r if not self._is_ir_calculated(r, order=1)]
 
+        density_ghost = [1.] * len(ghost_r) if self.density is None else self.density
+        density_direct = [1.] * len(direct_r) if self.density is None else self.density
+
         # calc ghost images
+        args = (
+            # ghost isoradials
+            [   (r, self.incl, self.mass, 1, self.angular_resolution, d) for (r,d) in zip(ghost_r, density_ghost)  ]
+            # direct isoradials
+            + [ (r, self.incl, self.mass, 0, self.angular_resolution, d) for (r, d) in zip(direct_r, density_direct) ]
+        )
         with Pool() as pool:
-            args = (
-                # ghost isoradials
-                [   (r, self.incl, self.mass, 1, self.angular_resolution) for r in ghost_r  ]
-                # direct isoradials
-                + [ (r, self.incl, self.mass, 0, self.angular_resolution) for r in direct_r ]
-            )
             isoradials = pool.starmap(Isoradial, args)
 
         self.isoradials.extend(isoradials)
@@ -316,7 +349,7 @@ class BlackHole:
             :class:`~matplotlib.axes.Axes`: The axis with the isoradials plotted.
         """
 
-        radii = np.linspace(self.disk_inner_edge, self.disk_outer_edge, self.radial_resolution)
+        radii = np.linspace(self.disk_inner_edge, self.disk_outer_edge, self._get_radial_resolution())
         ax = self.plot_isoradials(direct_r=radii, ghost_r=radii, color_by="flux", **kwargs)
         return ax
 
@@ -387,7 +420,7 @@ class BlackHole:
         Returns:
             :class:`matplotlib.axes.Axes`: The plotted isofluxlines.
         """
-        radii = np.linspace(self.disk_inner_edge, self.disk_outer_edge, self.radial_resolution)
+        radii = np.linspace(self.disk_inner_edge, self.disk_outer_edge, self._get_radial_resolution())
         if order == 0: self.calc_isoradials(direct_r=radii, ghost_r=[])
         elif order == 1: self.calc_isoradials(direct_r=[], ghost_r=radii)
         else: raise ValueError("Orders other than 0 (direct) or 1 (ghost) are not supported yet.")

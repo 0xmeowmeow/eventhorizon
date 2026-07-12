@@ -34,6 +34,7 @@ class Isoradial:
         bh_mass: float,
         order: int = 0,
         angular_resolution: int | None = None,
+        density: float | None = None,
     ):
         r"""
         Args:
@@ -63,6 +64,8 @@ class Isoradial:
         """float: Radius to the black hole in the black hole reference frame."""
         self.order = order
         """int: order of the image this isoradial is associated with"""
+        self.density = density
+        """Density of the isoradial in relative units. Density is translated to opacity during plotting."""
         self.angular_resolution = angular_resolution if angular_resolution is not None else 100
         r"""Amount of subdivisions in :math:`\alpha`"""
 
@@ -207,13 +210,15 @@ class Isoradial:
             :py:class:`~matplotlib.axes.Axes`: The axis with the isoradial plotted.
         """
 
+        alpha = self.density or 1.0
+
         if z is None:
-            ax = ax.plot(self.angles, self.impact_parameters, **kwargs)
+            ax = ax.plot(self.angles, self.impact_parameters, alpha=alpha, **kwargs)
         else:
             norm = norm or (min(z), max(z))
             cmap = cmap or "Greys_r"
             ax = colorline(
-                ax, self.angles, self.impact_parameters, z=z, cmap=cmap, norm=norm, **kwargs
+                ax, self.angles, self.impact_parameters, z=z, cmap=cmap, norm=norm, alpha=alpha, **kwargs
             )
 
         return ax

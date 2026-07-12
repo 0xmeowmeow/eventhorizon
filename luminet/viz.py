@@ -19,7 +19,7 @@ def make_segments(x, y):
     return segments
 
 
-def colorline(ax, x, y, z, norm, cmap, linewidth=3, **kwargs):
+def colorline(ax, x, y, z, norm, cmap, linewidth=3, alpha=1.0, **kwargs):
     """Plot a line that changes color along the way.
 
     Args:
@@ -49,8 +49,9 @@ def colorline(ax, x, y, z, norm, cmap, linewidth=3, **kwargs):
         segments,
         cmap=cmap,
         linewidth=linewidth,
-        capstyle="round",
+        capstyle="butt",
         norm=norm,
+        alpha=alpha,
         **kwargs
     )
     lc.set_array(z)
