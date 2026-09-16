@@ -1111,6 +1111,10 @@ def build_parser():
                    choices=["half", "sextant", "braille", "plot1979"],
                    help="half-block is full colour; sextant and braille trade colour for "
                         "finer dots; plot1979 is the inked-dot look of the original figure")
+    p.add_argument("--dot-gamma", type=float, default=0.5,
+                   help="sextant and braille: below 1 lights more dots in the dim disk")
+    p.add_argument("--ink-gamma", type=float, default=0.6,
+                   help="plot1979: below 1 is denser, above 1 sparser")
     p.add_argument("--cycle", action="store_true",
                    help="wander through the settings on a timer, hands off")
     p.add_argument("--cycle-every", type=float, default=12.0, help="seconds between changes")

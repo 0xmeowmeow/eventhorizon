@@ -36,6 +36,7 @@ ENCODING_CYCLE = ["half", "sextant", "braille", "plot1979"]
 
 # Luminet inked his 1979 figure dot by dot on negative paper; this is that.
 INK = (238, 230, 210)
+PAPER = (14, 16, 13)     # the print is not quite black
 
 PALETTE_CYCLE = ["ember", "inferno", "magma", "amber", "phosphor", "ice",
                  "plasma", "cividis", "bone", "copper", "gameboy", "bw"]
@@ -121,8 +122,29 @@ class Live:
         self.stars = cells.starfield(self.w, self.h, self.o.star_density, self.seed + 5)
         self.stars_shown = cells.starfield(self.cols, self.rows * 2,
                                            self.o.star_density, self.seed + 5)
+        if self.encoding == "plot1979":
+            # No tracer: the dots are the material, so the motion shows without
+            # one. Many parcels, because most of them are faint and thinly kept.
+            self.dust = spin.Parcels(self.mapping["radii"], count=int(self.w * self.h * 2.5),
+                                     seed=self.seed, infall=self.o.infall, clumps=0,
+                                     spread="log")
         self.resized = False
         sys.stdout.write("\033[2J\033[H")
+
+    def physics(self):
+        """The settings the map is solved for.
+
+        plot1979 solves a much wider disk than it frames. In Luminet's figure the
+        disk runs well past the edges of the picture, so there is faint light,
+        and therefore a scattering of dots, over the whole frame - which is why
+        the original has no stars and needs none. The framing still follows the
+        disk-size setting, so - and = zoom as before.
+        """
+        if self.encoding != "plot1979":
+            return self.settings
+        wide = dict(self.settings)
+        wide["outer_edge"] = max(160.0, self.settings["outer_edge"] * 4)
+        return wide
 
     def solve(self, why=""):
         """Rebuild the lensing map, showing how far along it is."""
@@ -136,12 +158,21 @@ class Live:
             sys.stdout.flush()
 
         sys.stdout.write("\033[2J\033[H\n")
+        physics = self.physics()
+        self.solved_for = self.encoding == "plot1979"
+        rings = self.o.rings * 2 if self.solved_for else self.o.rings
         self.mapping = spin.lensing_map(
-            self.settings, n_rings=self.o.rings, n_angles=self.o.angles,
+            physics, n_rings=rings, n_angles=self.o.angles,
             orders=(0,) if self.o.no_ghost else (0, 1),
             on_progress=bar, batches=6,
         )
-        self.extent = spin.reach(self.mapping, (0,) if self.o.no_ghost else (0, 1))
+        orders = (0,) if self.o.no_ghost else (0, 1)
+        if self.solved_for:
+            rx, ry = spin.reach(self.mapping, orders,
+                                max_radius=self.settings["outer_edge"] * 0.85)
+            self.extent = (rx * 0.78, ry * 0.95)
+        else:
+            self.extent = spin.reach(self.mapping, orders)
         self.rates = spin.true_rates(self.mapping["radii"],
                                      float(self.settings["mass"]), self.speed)
         sys.stdout.write("\r\033[2K")
@@ -154,6 +185,8 @@ class Live:
     # ---------------------------------------------------------------- drawing
 
     def draw(self):
+        if self.encoding == "plot1979":
+            return self.draw_1979()
         orders = (0,) if self.o.no_ghost else (0, 1)
         grid = spin.frame(self.mapping, self.parcels, self.clock, self.rw, self.rh,
                           self.extent, None, orders, rates=self.rates,
@@ -165,8 +198,10 @@ class Live:
 
         if not ENCODINGS[self.encoding]["colour"]:
             # One colour per cell, so the fine structure comes from which dots
-            # are lit and the palette is applied cell by cell on top.
-            lit = cells.stipple(value, 1.0) & grid["mask"]
+            # are lit and the palette is applied cell by cell on top. Dots only
+            # have two states, so the tone is lifted before thresholding: at the
+            # picture's own gamma the dim outer disk lit almost nothing.
+            lit = cells.stipple(value ** self.o.dot_gamma, 1.0) & grid["mask"]
             star_dots = None
             if self.stars_on:
                 star_dots = (self.stars > self.o.star_cut) & ~grid["mask"]
@@ -203,6 +238,19 @@ class Live:
         if self.vignette_on:
             img = cells.vignette(img, 0.4)
         return cells.half_block(img)
+
+    def draw_1979(self, grid=None):
+        """After Luminet's figure: scattered cream dots on near-black.
+
+        Each dot is a parcel of gas, kept with probability proportional to how
+        bright it looks right now. The dots therefore are the disk: they orbit,
+        brighten into view on the approaching side, and fill the whole frame
+        thinly, because the disk solved for this mode runs far past its edges.
+        """
+        orders = (0,) if self.o.no_ghost else (0, 1)
+        lit = spin.dots(self.mapping, self.dust, self.clock, self.w, self.h,
+                        self.extent, self.rates, orders, gamma=self.o.ink_gamma)
+        return cells.braille(lit, INK, PAPER)
 
     def cell_colours(self, value, mask, star_dots):
         """A palette colour for each cell, from the light that falls in it.
@@ -289,6 +337,8 @@ class Live:
         elif key in ("e", "E"):
             at = ENCODING_CYCLE.index(self.encoding)
             self.encoding = ENCODING_CYCLE[(at + (1 if key == "e" else -1)) % len(ENCODING_CYCLE)]
+            if (self.encoding == "plot1979") != getattr(self, "solved_for", False):
+                self.solve("the 1979 disk" if self.encoding == "plot1979" else "the disk")
             self.resized = True
         elif key == "y":
             self.cycling = not self.cycling
@@ -325,6 +375,8 @@ class Live:
         elif self.step % 6 == 2:
             at = ENCODING_CYCLE.index(self.encoding)
             self.encoding = ENCODING_CYCLE[(at + 1) % len(ENCODING_CYCLE)]
+            if (self.encoding == "plot1979") != getattr(self, "solved_for", False):
+                self.solve("the 1979 disk" if self.encoding == "plot1979" else "the disk")
             self.resized = True
         elif self.step % 6 == 4:
             self.bloom = 0.0 if self.bloom > 0.3 else 0.5

@@ -173,6 +173,18 @@ def stipple(values, strength=1.0):
     return values * strength > tile
 
 
+def scatter(values, threshold):
+    """Dots placed irregularly, the way Luminet's were.
+
+    An ordered threshold lays its dots on a lattice, and at low density the
+    lattice shows as a checkerboard. His figure was hand-inked, so the dots are
+    scattered. A random threshold scatters them too, but drawn fresh each frame
+    it boils; drawn once and reused it holds still while the light moves under
+    it.
+    """
+    return values > threshold
+
+
 # ------------------------------------------------------------------- colouring
 
 def downsample(rgb, factor):

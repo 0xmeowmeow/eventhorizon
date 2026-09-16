@@ -127,13 +127,22 @@ def true_rates(radii, mass, inner_orbits_per_second=0.12):
 class Parcels:
     """Gas, spread over the disk, carried around the map."""
 
-    def __init__(self, radii, count=9000, seed=0, infall=0.0, clumps=5, depth=0.9):
+    def __init__(self, radii, count=9000, seed=0, infall=0.0, clumps=5, depth=0.9,
+                 spread="area"):
         rng = np.random.default_rng(seed)
-        # Weight by radius so the disk is evenly covered by area, not by ring.
-        weights = radii / radii.sum()
+        if spread == "log":
+            # Evenly in log radius. Where each cell's brightness is measured and
+            # then imposed, parcels only have to cover the picture, and a wide
+            # disk sampled by area puts almost all of them far off its edges.
+            weights = 1.0 / radii
+        else:
+            # Weight by radius so the disk is evenly covered by area, not ring.
+            weights = radii.astype(float)
+        weights = weights / weights.sum()
         self.ring = rng.choice(len(radii), size=count, p=weights)
         self.angle0 = rng.random(count) * 2 * np.pi
         self.jitter = rng.random(count)          # keeps parcels off the ring lines
+        self.luck = rng.random(count)            # whether it shows, fixed for life
         self.infall = infall
         self.count = count
 
@@ -173,25 +182,37 @@ class Parcels:
         return ring, r, angle % (2 * np.pi)
 
 
-def _splat(grid, rows, cols, values, spread):
-    """Add light at a position, optionally spread over neighbouring cells."""
+def _kernel(spread):
+    """Offsets and weights for spreading a point over nearby cells."""
     if spread <= 0:
-        np.add.at(grid, (rows, cols), values)
-        return
+        return np.array([0]), np.array([0]), np.array([1.0])
     k = int(np.ceil(spread))
     sigma = spread / 2.0
+    dy, dx = np.mgrid[-k:k + 1, -k:k + 1]
+    distance = np.hypot(dx, dy)
+    # Round, not square: a box of cells with a gentle falloff leaves the
+    # corners bright enough to read as a square rather than a glint.
+    keep = distance <= spread
+    weight = np.exp(-(distance[keep] ** 2) / (2 * sigma ** 2))
+    return dy[keep], dx[keep], weight
+
+
+def _splat(grid, rows, cols, values, spread):
+    """Add light at a position, optionally spread over neighbouring cells.
+
+    np.add.at was nearly half the cost of a frame: it is unbuffered and handles
+    one element at a time. Flattening the target index and accumulating with a
+    single bincount does the same sum in one vectorised pass, with every kernel
+    offset folded into the same call rather than one call each.
+    """
     height, width = grid.shape
-    for dy in range(-k, k + 1):
-        for dx in range(-k, k + 1):
-            # Round, not square: a box of cells with a gentle falloff leaves the
-            # corners bright enough to read as a square rather than a glint.
-            distance = np.hypot(dx, dy)
-            if distance > spread:
-                continue
-            falloff = np.exp(-(distance ** 2) / (2 * sigma ** 2))
-            r, c = rows + dy, cols + dx
-            ok = (r >= 0) & (r < height) & (c >= 0) & (c < width)
-            np.add.at(grid, (r[ok], c[ok]), values[ok] * falloff)
+    dy, dx, weight = _kernel(spread)
+    r = rows[None, :] + dy[:, None]
+    c = cols[None, :] + dx[:, None]
+    v = values[None, :] * weight[:, None]
+    ok = (r >= 0) & (r < height) & (c >= 0) & (c < width)
+    index = (r[ok] * width + c[ok]).astype(np.int64)
+    grid += np.bincount(index, weights=v[ok], minlength=height * width).reshape(height, width)
 
 
 def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
@@ -282,8 +303,8 @@ def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
                 # reads as a hole in the disk.
                 _splat(gas, rows, columns, values, gas_spread)
                 _splat(gas_n, rows, columns, np.ones_like(values), gas_spread)
-            np.add.at(z_sum, (rows, columns), z[good][inside] * values)
-            np.add.at(z_weight, (rows, columns), values)
+            _splat(z_sum, rows, columns, z[good][inside] * values, 0)
+            _splat(z_weight, rows, columns, values, 0)
 
     with np.errstate(invalid="ignore", divide="ignore"):
         brightness = np.where(gas_n > 0, gas / np.where(gas_n > 0, gas_n, 1), 0.0) + hot
@@ -326,18 +347,116 @@ def fit_extent(extent, width, height, cell_aspect=CELL_ASPECT, reach_y=None):
     return extent_x, extent_y
 
 
-def reach(mapping, orders=(0, 1)):
+def dots(mapping, parcels, phase, width, height, extent, rates, orders=(0, 1),
+         gamma=0.85, smooth=1.4):
+    """Light individual dots from the gas, for the 1979 look.
+
+    The dots are the material, so they orbit and the disk visibly turns without
+    any tracer pattern. Two things have to be right for that to look like a
+    brightness map rather than a map of where the samples happened to fall.
+
+    Where a dot sits. Parcels in one ring all share that ring's curve on screen,
+    so however their radius is jittered they line up into streaks. Each parcel's
+    position is interpolated between its ring and the next by its jitter, which
+    spreads the dots continuously across the disk.
+
+    How many dots a cell gets. The near side of the disk packs a great many
+    parcels into a few cells, so keeping parcels in proportion to their
+    brightness still over-fills those cells - the same mistake as summing light.
+    Instead the brightness per cell is measured first, as a mean, and each cell
+    is then lit with that probability however many parcels it holds: each parcel
+    is kept with 1 - (1 - target) ** (1 / count). A parcel's chance is fixed for
+    its life, so dots do not flicker from frame to frame.
+
+    Returns a boolean (height, width) array of lit dots.
+    """
+    radii, angles = mapping["radii"], mapping["angles"]
+    bh = mapping["bh"]
+    if isinstance(extent, (tuple, list)):
+        extent_x, extent_y = fit_extent(extent[0], width, height, reach_y=extent[1])
+    else:
+        extent_x, extent_y = fit_extent(extent, width, height)
+
+    ring, r, angle = parcels.at(phase, radii, None, rates)
+    upper = np.minimum(ring + 1, len(radii) - 1)
+    between = parcels.jitter
+    col = angle / (2 * np.pi) * (len(angles) - 1)
+    lo = np.floor(col).astype(int) % len(angles)
+    hi = (lo + 1) % len(angles)
+    t = col - np.floor(col)
+    r_between = (1 - between) * radii[ring] + between * radii[upper]
+
+    idx_all, flux_all, luck_all = [], [], []
+    for order in orders:
+        if order not in mapping["tables"]:
+            continue
+        b_table, z_table = mapping["tables"][order]
+
+        def lookup(table):
+            here = (1 - t) * table[ring, lo] + t * table[ring, hi]
+            there = (1 - t) * table[upper, lo] + t * table[upper, hi]
+            return (1 - between) * here + between * there
+
+        b, z = lookup(b_table), lookup(z_table)
+        good = np.isfinite(b) & np.isfinite(z)
+        if not good.any():
+            continue
+        flux = bhmath.calc_flux_observed(r_between[good], bh.acc, bh.mass, z[good])
+        if order == 1:
+            flux = flux * 0.45
+        x = b[good] * np.sin(angle[good])
+        y = -b[good] * np.cos(angle[good])
+        ci = ((x / extent_x + 1) / 2 * (width - 1)).astype(np.int64)
+        ri = ((-y / extent_y + 1) / 2 * (height - 1)).astype(np.int64)
+        inside = (ci >= 0) & (ci < width) & (ri >= 0) & (ri < height) & np.isfinite(flux)
+        idx_all.append(ri[inside] * width + ci[inside])
+        flux_all.append(flux[inside])
+        luck_all.append(parcels.luck[good][inside])
+
+    lit = np.zeros(height * width, dtype=bool)
+    if not idx_all:
+        return lit.reshape(height, width)
+    idx = np.concatenate(idx_all)
+    flux = np.concatenate(flux_all)
+    luck = np.concatenate(luck_all)
+
+    count = np.bincount(idx, minlength=height * width)
+    total = np.bincount(idx, weights=flux, minlength=height * width)
+    mean = (total / np.maximum(count, 1)).reshape(height, width)
+    if smooth > 0:
+        from scipy.ndimage import gaussian_filter
+
+        # Smooth the brightness, then put back the zeros: blurring into the
+        # shadow would scatter dots across the one place that must stay black.
+        covered = gaussian_filter((count > 0).reshape(height, width).astype(float), smooth)
+        mean = gaussian_filter(mean, smooth) / np.maximum(covered, 1e-6)
+        mean[count.reshape(height, width) == 0] = 0.0
+    mean = mean.ravel()
+
+    positive = mean[mean > 0]
+    scale = np.percentile(positive, 99.3) if positive.size else 1.0
+    target = np.clip(mean / max(scale, 1e-30), 0.0, 1.0) ** gamma
+
+    n = np.maximum(count[idx], 1)
+    chance = 1.0 - (1.0 - target[idx]) ** (1.0 / n)
+    lit[idx[luck < chance]] = True
+    return lit.reshape(height, width)
+
+
+def reach(mapping, orders=(0, 1), max_radius=None):
     """How far the image extends across and down, so every frame shares a scale.
 
     Returned as (x, y): an inclined disk is much wider than it is tall, and
     knowing both is what lets a wide window be filled rather than padded.
     """
     angles = mapping["angles"]
+    rows = (slice(None) if max_radius is None
+            else mapping["radii"] <= max_radius)
     rx = ry = 1.0
     for order in orders:
         if order not in mapping["tables"]:
             continue
-        b = mapping["tables"][order][0]
+        b = mapping["tables"][order][0][rows]
         if not np.isfinite(b).any():
             continue
         xs = np.abs(b * np.sin(angles)[None, :])
