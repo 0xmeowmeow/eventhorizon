@@ -302,7 +302,11 @@ class BlackHole:
         if color_by == "redshift":
             if not "cmap" in kwargs:
                 kwargs["cmap"] = "RdBu_r"
-            mx = np.max([np.max(z) for z in zs])
+            # redshift_factors are 1 + z, so subtract 1 to get the redshift
+            # itself, and normalise symmetrically so that the diverging colormap
+            # puts z = 0 at its midpoint.
+            zs = [ir.redshift_factors - 1 for ir in self.isoradials]
+            mx = np.max([np.max(np.abs(z)) for z in zs])
             norm = (-mx, mx)
         elif color_by == "flux":
             if not "cmap" in kwargs:
@@ -315,6 +319,10 @@ class BlackHole:
             ]
             mx = np.max([np.max(z) for z in zs])
             norm = (0, mx)
+        else:
+            raise ValueError(
+                f"Unknown color_by {color_by!r}, expected 'flux' or 'redshift'."
+            )
         
         for z, ir in zip(zs, self.isoradials):
             if ir.radius in direct_r and ir.order == 0:
