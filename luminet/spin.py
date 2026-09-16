@@ -119,7 +119,7 @@ def true_rates(radii, mass, inner_orbits_per_second=0.12):
 class Parcels:
     """Gas, spread over the disk, carried around the map."""
 
-    def __init__(self, radii, count=9000, seed=0, infall=0.0, clumps=3, depth=0.75):
+    def __init__(self, radii, count=9000, seed=0, infall=0.0, clumps=5, depth=0.9):
         rng = np.random.default_rng(seed)
         # Weight by radius so the disk is evenly covered by area, not by ring.
         weights = radii / radii.sum()
@@ -134,7 +134,8 @@ class Parcels:
         # tracer, not a prediction: the model says nothing about clumping, and
         # the pattern is here only so the motion can be seen. It is attached to
         # the material by the parcel's starting angle, so it orbits with the gas
-        # and the differential rates shear it, as they would any real pattern.
+        # and the differential rates wind it into arms - that shearing is real,
+        # even though the pattern being sheared was put there by hand.
         self.brightness = 1.0
         if clumps:
             self.brightness = 1.0 + depth * np.cos(clumps * self.angle0)

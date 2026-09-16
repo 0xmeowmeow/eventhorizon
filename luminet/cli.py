@@ -1043,13 +1043,14 @@ def build_parser():
                    help="cap on how many times the inner ring laps per loop")
     p.add_argument("--infall", type=float, default=0.0,
                    help="inward drift per loop, 0 to 1. Costs the exact loop")
-    p.add_argument("--clumps", type=int, default=3,
-                   help="how many bright patches to mark the gas with, so the rotation "
-                        "is visible. A tracer, not something the model predicts. 0 for none")
-    p.add_argument("--depth", type=float, default=0.75, help="how pronounced the patches are")
-    p.add_argument("--hotspots", type=int, default=14,
-                   help="bright spots carried round with the gas, so the rotation reads. "
-                        "A marker on the gas, not a prediction. 0 for none")
+    p.add_argument("--clumps", type=int, default=5,
+                   help="how many bright patches to mark the gas with, so the rotation is "
+                        "visible. The patches are a tracer the model does not predict; the "
+                        "way they shear into arms is real differential rotation. 0 for none")
+    p.add_argument("--depth", type=float, default=0.9, help="how pronounced the pattern is")
+    p.add_argument("--hotspots", type=int, default=0,
+                   help="discrete bright spots carried round with the gas. Off by default, "
+                        "since the sheared pattern now carries the motion on its own")
     p.add_argument("--hot-gain", type=float, default=10.0, help="how bright those spots are")
     p.add_argument("--hot-spread", type=float, default=1.3, help="how many cells each covers")
     p.add_argument("--gas-spread", type=float, default=1.4,

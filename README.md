@@ -138,11 +138,11 @@ disk laps the outer. Turns per loop are rounded to whole numbers so the loop
 closes exactly, which costs a little accuracy in each ring's rate but never the
 ordering.
 
-The bright spots are a marker on the gas, not a prediction. Smooth gas cannot
-show rotation - spread evenly it looks identical at every phase, and a clumped
-pattern shears and averages away, because each screen position stacks light from
-many radii turning at different rates. `--hotspots 0` removes them and the
-rotation becomes invisible, which is worth seeing once.
+Smooth gas cannot show rotation: spread evenly it looks identical at every
+phase, whatever it is actually doing. So the gas carries a faint pattern, and
+the differential rates wind it into shearing arms. The pattern is a tracer the
+model does not predict; the shear acting on it is real. `--clumps 0` removes it
+and the rotation becomes invisible, which is worth seeing once.
 
 ### Drawing in the terminal
 
