@@ -114,6 +114,20 @@ def sextant(mask, foreground=(255, 255, 255), background=(0, 0, 0)):
 
 # ------------------------------------------------------------------- colouring
 
+def downsample(rgb, factor):
+    """Average an image down, which is what makes the terminal copy look sharp.
+
+    Rendering above the cell grid and averaging back gives the half blocks
+    anti-aliased edges, rather than the hard steps of sampling once per cell.
+    """
+    if factor <= 1:
+        return rgb
+    h = rgb.shape[0] // factor * factor
+    w = rgb.shape[1] // factor * factor
+    block = rgb[:h, :w].reshape(h // factor, factor, w // factor, factor, 3)
+    return block.mean(axis=(1, 3)).astype(np.uint8)
+
+
 def _ramp(t, stops):
     """Linear interpolation through a list of RGB stops."""
     t = np.clip(t, 0.0, 1.0)
@@ -127,7 +141,7 @@ FLUX_STOPS = [(0, 0, 0), (70, 40, 20), (190, 120, 45), (255, 220, 150), (255, 25
 REDSHIFT_STOPS = [(70, 130, 255), (170, 205, 255), (245, 245, 245), (255, 170, 140), (230, 60, 40)]
 
 
-def colourise(grid, channel="both"):
+def colourise(grid, channel="both", gamma=1.0):
     """Turn a rasterised field into an (H, W, 3) image.
 
     'both' is the one worth looking at: brightness carries the flux, the thing a
@@ -140,7 +154,7 @@ def colourise(grid, channel="both"):
     out = np.zeros((*shape, 3))
 
     if channel == "flux":
-        t = fields.normalise(grid, "flux")
+        t = fields.normalise(grid, "flux", gamma=gamma)
         out = _ramp(np.nan_to_num(t), FLUX_STOPS)
     elif channel == "redshift":
         t = fields.normalise(grid, "z")
@@ -157,7 +171,7 @@ def colourise(grid, channel="both"):
         # flattened it into grey soup; the flux view beat it easily. Contrast is
         # what makes the picture read, so keep the flux ramp exactly as it is
         # and only tint it, which costs saturation rather than dynamic range.
-        base = _ramp(np.nan_to_num(fields.normalise(grid, "flux")), FLUX_STOPS)
+        base = _ramp(np.nan_to_num(fields.normalise(grid, "flux", gamma=gamma)), FLUX_STOPS)
         tint = _ramp(np.nan_to_num(fields.normalise(grid, "z"), nan=0.5), REDSHIFT_STOPS)
         luminance = base.mean(axis=-1, keepdims=True)
         tint = tint / np.maximum(tint.max(axis=-1, keepdims=True), 1.0)

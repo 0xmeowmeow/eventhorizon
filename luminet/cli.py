@@ -566,7 +566,11 @@ def cmd_spin(args):
     size = shutil.get_terminal_size((96, 30))
     width_cells = args.width or max(20, size.columns - 2)
     height_cells = args.height or max(10, size.lines - 4)
+    ss = max(1, args.supersample)
     width, height = width_cells, height_cells * 2      # half-block
+    # Render above the cell grid and average back down: the terminal copy gets
+    # anti-aliased edges, and the saved copy keeps the full resolution.
+    render_w, render_h = width * ss, height * ss
 
     settings = {**DEFAULTS, "radii": "", "ghost_radii": ""}
     run = notebook.get(args.run) if args.run else None
@@ -584,7 +588,10 @@ def cmd_spin(args):
     extent = spin.reach(mapping, orders)
     turns = spin.ring_turns(mapping["radii"], float(settings["mass"]), args.frames,
                             max_turns=args.max_turns)
-    parcels = spin.Parcels(mapping["radii"], count=args.parcels, seed=args.seed,
+    # Keep the gas at a constant density: a fixed count spread over a larger
+    # grid just makes the disk thinner as the resolution goes up.
+    count = args.parcels or int(render_w * render_h * 0.9)
+    parcels = spin.Parcels(mapping["radii"], count=count, seed=args.seed,
                            infall=args.infall, clumps=args.clumps, depth=args.depth)
     hotspots = None
     if args.hotspots:
@@ -602,23 +609,36 @@ def cmd_spin(args):
 
     print(f"pre-rendering {args.frames} frames ...", end="", flush=True)
     started = time.time()
-    images = []
+    full = []
     for i in range(args.frames):
-        grid = spin.frame(mapping, parcels, i / args.frames, width, height,
+        grid = spin.frame(mapping, parcels, i / args.frames, render_w, render_h,
                           extent, turns, orders, hotspots=hotspots,
-                          hot_gain=args.hot_gain, hot_spread=args.hot_spread)
-        images.append(cells.colourise(grid, args.channel))
+                          hot_gain=args.hot_gain, hot_spread=args.hot_spread * ss)
+        full.append(cells.colourise(grid, args.channel, gamma=args.gamma))
+    images = [cells.downsample(img, ss) for img in full]
     print(f" {time.time() - started:.0f}s")
 
-    if args.save_frames:
+    if args.gif or args.save_frames:
         from PIL import Image
 
-        out = Path(args.save_frames)
-        out.mkdir(parents=True, exist_ok=True)
-        for i, img in enumerate(images):
-            Image.fromarray(img).save(out / f"spin_{i:03d}.png")
-        print(f"wrote {len(images)} frames to {out}")
-        return 0
+        if args.save_frames:
+            out = Path(args.save_frames)
+            out.mkdir(parents=True, exist_ok=True)
+            for i, img in enumerate(full):
+                Image.fromarray(img).save(out / f"spin_{i:03d}.png")
+            print(f"wrote {len(full)} frames to {out}")
+        if args.gif:
+            scale = max(1, args.gif_scale)
+            frames = [Image.fromarray(img).resize(
+                (img.shape[1] * scale, img.shape[0] * scale), Image.NEAREST)
+                for img in full]
+            frames = [f.quantize(colors=255, method=Image.Quantize.MEDIANCUT) for f in frames]
+            frames[0].save(args.gif, save_all=True, append_images=frames[1:],
+                           duration=int(1000 / args.fps), loop=0, optimize=True, disposal=2)
+            print(f"wrote {args.gif}  {len(frames)} frames, "
+                  f"{frames[0].size[0]}x{frames[0].size[1]}, loops")
+        if not args.play:
+            return 0
 
     # Everything below is display: the physics is already done.
     panes = [cells.half_block(img) for img in images]
@@ -953,7 +973,8 @@ def build_parser():
                    choices=["flux", "both", "redshift"], help="what the colour means")
     p.add_argument("--frames", type=int, default=48, help="frames in one loop")
     p.add_argument("--fps", type=int, default=20)
-    p.add_argument("--parcels", type=int, default=9000, help="how much gas to track")
+    p.add_argument("--parcels", type=int, default=0,
+                   help="how much gas to track; 0 scales it with the resolution")
     p.add_argument("--rings", type=int, default=44, help="radii the map is solved at")
     p.add_argument("--angles", type=int, default=180)
     p.add_argument("--max-turns", type=int, default=None,
@@ -980,6 +1001,14 @@ def build_parser():
     p.add_argument("--width", type=int)
     p.add_argument("--height", type=int)
     p.add_argument("--save-frames", help="write the frames as PNGs instead of playing")
+    p.add_argument("--gif", help="write an animated gif instead of playing")
+    p.add_argument("--gif-scale", type=int, default=3, help="upscale the gif by this much")
+    p.add_argument("--play", action="store_true",
+                   help="play in the terminal as well as saving")
+    p.add_argument("--supersample", type=int, default=2,
+                   help="render this many times above the cell grid, then average down")
+    p.add_argument("--gamma", type=float, default=0.75,
+                   help="below 1 lifts the faint disk, above 1 deepens the blacks")
     p.set_defaults(func=cmd_spin)
 
     sub.add_parser("tui", help="the interactive instrument: parameters and a live preview")

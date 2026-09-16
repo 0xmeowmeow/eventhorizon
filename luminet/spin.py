@@ -148,11 +148,17 @@ def _splat(grid, rows, cols, values, spread):
     if spread <= 0:
         np.add.at(grid, (rows, cols), values)
         return
-    k = int(spread)
+    k = int(np.ceil(spread))
+    sigma = spread / 2.0
     height, width = grid.shape
     for dy in range(-k, k + 1):
         for dx in range(-k, k + 1):
-            falloff = np.exp(-(dx * dx + dy * dy) / (2 * (spread / 1.5) ** 2))
+            # Round, not square: a box of cells with a gentle falloff leaves the
+            # corners bright enough to read as a square rather than a glint.
+            distance = np.hypot(dx, dy)
+            if distance > spread:
+                continue
+            falloff = np.exp(-(distance ** 2) / (2 * sigma ** 2))
             r, c = rows + dy, cols + dx
             ok = (r >= 0) & (r < height) & (c >= 0) & (c < width)
             np.add.at(grid, (r[ok], c[ok]), values[ok] * falloff)

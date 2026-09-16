@@ -122,8 +122,15 @@ def rasterise(orders, width, height, extent=None, slack=1.6):
     return out
 
 
-def normalise(grid, channel, lo=None, hi=None):
-    """Scale one channel to 0..1, leaving empty cells as NaN."""
+def normalise(grid, channel, lo=None, hi=None, percentile=97.0, gamma=1.0):
+    """Scale one channel to 0..1, leaving empty cells as NaN.
+
+    Flux spans orders of magnitude, and a handful of very bright cells set the
+    maximum: with a bright spot in frame the whole disk sits near 1.7% of the
+    scale and renders as black. Scaling to a high percentile instead and letting
+    the brightest cells clip puts the disk back in the visible range, which is
+    what a photograph of something this bright would do anyway.
+    """
     values = grid[channel]
     finite = values[np.isfinite(values)]
     if not finite.size:
@@ -135,8 +142,10 @@ def normalise(grid, channel, lo=None, hi=None):
         lo, hi = 1.0 - reach, 1.0 + reach
     else:
         lo = float(finite.min()) if lo is None else lo
-        hi = float(finite.max()) if hi is None else hi
+        if hi is None:
+            hi = float(np.percentile(finite, percentile)) if percentile else float(finite.max())
 
     if hi == lo:
         return np.where(np.isfinite(values), 0.5, np.nan)
-    return (values - lo) / (hi - lo)
+    scaled = np.clip((values - lo) / (hi - lo), 0.0, 1.0)
+    return scaled ** gamma if gamma != 1.0 else scaled
