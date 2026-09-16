@@ -557,6 +557,59 @@ def cmd_term(args):
     return 0
 
 
+def _spin_live(args, mapping, parcels, hotspots, extent, orders,
+               width, height, width_cells, height_cells, ss, settings):
+    """Compute frames as they are shown, so nothing has to repeat."""
+    from luminet import cells, spin
+
+    rates = spin.true_rates(mapping["radii"], float(settings["mass"]), args.speed)
+    render_w, render_h = width * ss, height * ss
+
+    inner = 2 * 3.14159265 / rates[0]
+    outer = 2 * 3.14159265 / rates[-1]
+    print(f"live: inner ring orbits every {inner:.1f}s, outer every {outer:.0f}s.")
+    print("Those periods are not whole multiples of each other, so the picture "
+          "never comes back\nto an arrangement it has been in. ctrl-c to stop.\n")
+
+    interval = 1.0 / args.fps
+    started = time.monotonic()
+    drawn, slow = 0, 0.0
+    sys.stdout.write("\033[?25l")
+    try:
+        first = True
+        while True:
+            began = time.monotonic()
+            elapsed = began - started
+            grid = spin.frame(mapping, parcels, elapsed, render_w, render_h,
+                              extent, None, orders, hotspots=hotspots,
+                              hot_gain=args.hot_gain, hot_spread=args.hot_spread * ss,
+                              gas_spread=args.gas_spread * ss, rates=rates)
+            img = cells.downsample(cells.colourise(grid, args.channel, gamma=args.gamma), ss)
+            pane = cells.half_block(img)
+
+            if not first:
+                sys.stdout.write(f"\033[{height_cells}A")
+            sys.stdout.write(pane + "\n")
+            sys.stdout.flush()
+            first = False
+            drawn += 1
+
+            spare = interval - (time.monotonic() - began)
+            if spare > 0:
+                time.sleep(spare)
+            else:
+                slow += 1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write("\033[?25h\n")
+        sys.stdout.flush()
+    ran = time.monotonic() - started
+    print(f"{drawn} frames in {ran:.0f}s = {drawn / max(ran, 1e-9):.1f} fps"
+          + (f", {slow:.0f} could not keep up" if slow else ""))
+    return 0
+
+
 def cmd_spin(args):
     """Animate the disk turning, in the terminal."""
     import numpy as np
@@ -566,7 +619,9 @@ def cmd_spin(args):
     size = shutil.get_terminal_size((96, 30))
     width_cells = args.width or max(20, size.columns - 2)
     height_cells = args.height or max(10, size.lines - 4)
-    ss = max(1, args.supersample)
+    live = not (args.gif or args.save_frames or args.loop)
+    # Live pays for every pixel every frame, so it renders at the cell grid.
+    ss = 1 if live else max(1, args.supersample)
     width, height = width_cells, height_cells * 2      # half-block
     # Render above the cell grid and average back down: the terminal copy gets
     # anti-aliased edges, and the saved copy keeps the full resolution.
@@ -586,6 +641,7 @@ def cmd_spin(args):
     mapping = spin.lensing_map(settings, n_rings=args.rings, n_angles=args.angles,
                                orders=orders)
     extent = spin.reach(mapping, orders)
+    want_file = bool(args.gif or args.save_frames)
     turns = spin.ring_turns(mapping["radii"], float(settings["mass"]), args.frames,
                             max_turns=args.max_turns)
     # Keep the gas at a constant density: a fixed count spread over a larger
@@ -598,7 +654,8 @@ def cmd_spin(args):
         hotspots = spin.Parcels(mapping["radii"], count=args.hotspots,
                                 seed=args.seed + 1, infall=args.infall, clumps=0)
     print(f" {time.time() - started:.0f}s")
-    print(f"  inner ring turns {turns[0]}x per loop, outer ring {turns[-1]}x")
+    if want_file or args.loop:
+        print(f"  inner ring turns {turns[0]}x per loop, outer ring {turns[-1]}x")
 
     recorded = notebook.record(
         settings,
@@ -606,6 +663,10 @@ def cmd_spin(args):
               f"{args.hotspots} hotspots, infall {args.infall}"),
     )
     print(f"recorded as run {recorded['id']}")
+
+    if not want_file and not args.loop:
+        return _spin_live(args, mapping, parcels, hotspots, extent, orders,
+                          width, height, width_cells, height_cells, ss, settings)
 
     print(f"pre-rendering {args.frames} frames ...", end="", flush=True)
     started = time.time()
@@ -996,6 +1057,11 @@ def build_parser():
     p.add_argument("--no-ghost", action="store_true", help="hide the second image")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--once", action="store_true", help="play one loop and stop")
+    p.add_argument("--loop", action="store_true",
+                   help="play a pre-rendered loop instead of computing frames live. "
+                        "Writing a file always uses the loop, since a file has to repeat")
+    p.add_argument("--speed", type=float, default=0.12,
+                   help="live only: orbits per second of the innermost ring")
     p.add_argument("--run", type=int, help="settings from a recorded run")
     p.add_argument("--incl", type=float)
     p.add_argument("--mass", type=float)

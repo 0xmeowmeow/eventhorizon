@@ -109,10 +109,21 @@ luminet show 4                  # redraw an earlier run and its lineage
 ### The disk turning
 
 ```shell
-luminet spin                    # animates in the terminal, ctrl-c to stop
+luminet spin                    # live, never repeats; ctrl-c to stop
 luminet spin --incl 0.9 --hotspots 20
-luminet spin --no-ghost --channel flux
+luminet spin --gif out.gif      # a file, so a loop
 ```
+
+On screen it runs live: each frame is computed as it is shown, so nothing has to
+return to where it started and the rings turn at their true Keplerian rates.
+Those periods are not whole multiples of one another, so no two rings ever come
+back into the same arrangement and the picture does not repeat.
+
+That is affordable because the expensive part happens once. Solving the lensing
+map costs about half a second; after that a frame is table lookups and splatting,
+about 14 ms at full terminal width, which leaves room to spare at 30fps. Writing
+a file still pre-renders a loop, since a file has to repeat: `--loop` plays that
+version on screen for comparison.
 
 The renderer is time-averaged and the disk is axially symmetric, so turning the
 picture changes nothing. What moves is the gas. The lensing map is solved once -

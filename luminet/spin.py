@@ -102,6 +102,20 @@ def ring_turns(radii, mass, frames, max_turns=None, min_frames_per_turn=10):
     return turns.astype(int)
 
 
+def true_rates(radii, mass, inner_orbits_per_second=0.12):
+    """Angular speed per ring, in radians per second, unrounded.
+
+    The looping version rounds each ring to a whole number of turns so that
+    everything returns to its start. Nothing has to return when the frames are
+    computed as they are shown, so the true Keplerian rates can be used instead.
+    Their ratios are irrational, so no two rings ever come back into the same
+    arrangement and the picture never repeats. That is the whole reason a live
+    version looks different from a loop, rather than just longer.
+    """
+    omega = np.sqrt(mass / radii ** 3)
+    return omega / omega[0] * inner_orbits_per_second * 2 * np.pi
+
+
 class Parcels:
     """Gas, spread over the disk, carried around the map."""
 
@@ -125,12 +139,16 @@ class Parcels:
         if clumps:
             self.brightness = 1.0 + depth * np.cos(clumps * self.angle0)
 
-    def at(self, phase, radii, turns):
-        """Where every parcel is, a fraction `phase` through the loop."""
+    def at(self, phase, radii, turns, rates=None):
+        """Where every parcel is.
+
+        With `rates` given, `phase` is elapsed seconds and the parcels turn at
+        their true rate, which never repeats. Without it, `phase` runs 0 to 1
+        through a loop and the rounded whole-turn counts bring everything back.
+        """
         ring = self.ring
         if self.infall:
-            # Drift inwards and re-enter at the outer edge. Parcels swap places
-            # over one loop, so the ensemble repeats even though they do not.
+            # Drift inwards and re-enter at the outer edge.
             slide = self.infall * phase * len(radii)
             ring = (self.ring - slide).astype(int) % len(radii)
 
@@ -139,8 +157,11 @@ class Parcels:
         step = radii[1] - radii[0] if len(radii) > 1 else 0.0
         r = r + (self.jitter - 0.5) * step
 
-        angle = (self.angle0 + 2 * np.pi * turns[ring] * phase) % (2 * np.pi)
-        return ring, r, angle
+        if rates is None:
+            angle = self.angle0 + 2 * np.pi * turns[ring] * phase
+        else:
+            angle = self.angle0 + rates[ring] * phase
+        return ring, r, angle % (2 * np.pi)
 
 
 def _splat(grid, rows, cols, values, spread):
@@ -165,7 +186,8 @@ def _splat(grid, rows, cols, values, spread):
 
 
 def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
-          hotspots=None, hot_gain=10.0, hot_spread=1.3, gas_spread=1.4):
+          hotspots=None, hot_gain=10.0, hot_spread=1.3, gas_spread=1.4,
+          rates=None):
     """One frame: the surface brightness seen in each direction.
 
     `hotspots` is a second, much smaller parcel set drawn bright and spread over
@@ -199,7 +221,7 @@ def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
         sets.append((hotspots, hot_gain, hot_spread, True))
 
     for group, gain, spread, is_hot in sets:
-        ring, r, angle = group.at(phase, radii, turns)
+        ring, r, angle = group.at(phase, radii, turns, rates)
 
         for order in orders:
             if order not in mapping["tables"]:

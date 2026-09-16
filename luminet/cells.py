@@ -71,22 +71,30 @@ def half_block(rgb):
     The glyph is always an upper half block, so the foreground paints the top
     subpixel and the background the bottom one.
     """
-    rgb = np.asarray(rgb)
+    rgb = np.asarray(rgb, dtype=np.uint32)
     height = rgb.shape[0] - rgb.shape[0] % 2
+    top, bottom = rgb[0:height:2], rgb[1:height:2]
+
+    # Pack each colour into one integer so runs of identical cells can be found
+    # by numpy rather than by comparing tuples in Python. Most of a frame is
+    # unchanged from its neighbour, so emitting one escape pair per run instead
+    # of per cell cuts both the work and the bytes sent by a large factor.
+    tkey = (top[..., 0] << 16) | (top[..., 1] << 8) | top[..., 2]
+    bkey = (bottom[..., 0] << 16) | (bottom[..., 1] << 8) | bottom[..., 2]
+
     lines = []
-    for row in range(0, height, 2):
-        top, bottom = rgb[row], rgb[row + 1]
-        out, last = [], (None, None)
-        for col in range(rgb.shape[1]):
-            t = tuple(int(v) for v in top[col])
-            b = tuple(int(v) for v in bottom[col])
-            # Only re-send a colour when it changes: this is most of the cost.
-            if t != last[0]:
-                out.append(_rgb(*t))
-            if b != last[1]:
-                out.append(_rgb(*b, background=True))
-            out.append(UPPER_HALF)
-            last = (t, b)
+    for row in range(tkey.shape[0]):
+        tr, br = tkey[row], bkey[row]
+        starts = np.flatnonzero(
+            np.r_[True, (tr[1:] != tr[:-1]) | (br[1:] != br[:-1])]
+        )
+        ends = np.r_[starts[1:], len(tr)]
+        out = []
+        for start, end in zip(starts.tolist(), ends.tolist()):
+            t, b = int(tr[start]), int(br[start])
+            out.append(f"\033[38;2;{t >> 16};{(t >> 8) & 255};{t & 255}"
+                       f";48;2;{b >> 16};{(b >> 8) & 255};{b & 255}m")
+            out.append(UPPER_HALF * (end - start))
         lines.append("".join(out) + RESET)
     return "\n".join(lines)
 
