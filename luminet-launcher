@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Launcher for the luminet CLI: runs it out of the project's own virtualenv,
+# so it works from any directory without activating anything.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$here/.venv/bin/luminet" "$@"

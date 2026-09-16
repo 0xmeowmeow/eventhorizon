@@ -17,6 +17,9 @@ classifiers = [
 readme = "README.md"
 license = { text = "MIT" }
 
+[project.scripts]
+luminet = "luminet.cli:main"
+
 [project.urls] 
 "Homepage" = "https://luminet.readthedocs.io/en/latest/"
 "Documentation" = "https://luminet.readthedocs.io/en/latest/"
