@@ -551,6 +551,9 @@ def cmd_term(args):
     filled = int(grid["mask"].sum())
     print(f"{filled} of {width * height} samples carry light "
           f"({100 * filled / (width * height):.0f}%)")
+    recorded = notebook.record(settings,
+                               note=f"term, {args.channel} channel, {args.encoding} cells")
+    print(f"recorded as run {recorded['id']}")
     return 0
 
 
@@ -589,6 +592,13 @@ def cmd_spin(args):
                                 seed=args.seed + 1, infall=args.infall, clumps=0)
     print(f" {time.time() - started:.0f}s")
     print(f"  inner ring turns {turns[0]}x per loop, outer ring {turns[-1]}x")
+
+    recorded = notebook.record(
+        settings,
+        note=(f"spin, {args.channel} channel, {args.frames} frames, "
+              f"{args.hotspots} hotspots, infall {args.infall}"),
+    )
+    print(f"recorded as run {recorded['id']}")
 
     print(f"pre-rendering {args.frames} frames ...", end="", flush=True)
     started = time.time()
@@ -919,8 +929,8 @@ def build_parser():
     p.set_defaults(func=cmd_animate)
 
     p = sub.add_parser("term", help="draw in the terminal with sub-cell glyphs")
-    p.add_argument("--channel", default="both",
-                   choices=["both", "flux", "redshift", "radius", "order"],
+    p.add_argument("--channel", default="flux",
+                   choices=["flux", "both", "redshift", "radius", "order"],
                    help="what to show. 'both' puts flux in the brightness and redshift in the hue")
     p.add_argument("--encoding", default="half", choices=["half", "sextant"],
                    help="half-block gives every subpixel its own colour; "
@@ -939,8 +949,8 @@ def build_parser():
     p.set_defaults(func=cmd_term)
 
     p = sub.add_parser("spin", help="animate the disk turning, in the terminal")
-    p.add_argument("--channel", default="both",
-                   choices=["both", "flux", "redshift"], help="what the colour means")
+    p.add_argument("--channel", default="flux",
+                   choices=["flux", "both", "redshift"], help="what the colour means")
     p.add_argument("--frames", type=int, default=48, help="frames in one loop")
     p.add_argument("--fps", type=int, default=20)
     p.add_argument("--parcels", type=int, default=9000, help="how much gas to track")

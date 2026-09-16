@@ -121,6 +121,8 @@ def _ramp(t, stops):
     return np.stack([np.interp(t, positions, [s[i] for s in stops]) for i in range(3)], axis=-1)
 
 
+TINT = 0.55   # how far the redshift is allowed to colour the flux image
+
 FLUX_STOPS = [(0, 0, 0), (70, 40, 20), (190, 120, 45), (255, 220, 150), (255, 255, 255)]
 REDSHIFT_STOPS = [(70, 130, 255), (170, 205, 255), (245, 245, 245), (255, 170, 140), (230, 60, 40)]
 
@@ -151,13 +153,15 @@ def colourise(grid, channel="both"):
         out[...] = np.where(ghost[..., None], np.array([255, 140, 60]),
                             np.array([120, 170, 255]))
     else:  # both
-        hue = _ramp(np.nan_to_num(fields.normalise(grid, "z"), nan=0.5), REDSHIFT_STOPS)
-        value = np.nan_to_num(fields.normalise(grid, "flux"))
-        # Flux spans orders of magnitude and most of the disk sits near the
-        # bottom of it, so a linear brightness leaves the hue invisible over
-        # almost the whole image. Lift the low end until the colour can be read.
-        value = value ** 0.35
-        out = hue * (0.25 + 0.75 * value)[..., None]
+        # An earlier version lifted the whole image to make the hue readable and
+        # flattened it into grey soup; the flux view beat it easily. Contrast is
+        # what makes the picture read, so keep the flux ramp exactly as it is
+        # and only tint it, which costs saturation rather than dynamic range.
+        base = _ramp(np.nan_to_num(fields.normalise(grid, "flux")), FLUX_STOPS)
+        tint = _ramp(np.nan_to_num(fields.normalise(grid, "z"), nan=0.5), REDSHIFT_STOPS)
+        luminance = base.mean(axis=-1, keepdims=True)
+        tint = tint / np.maximum(tint.max(axis=-1, keepdims=True), 1.0)
+        out = base * (1 - TINT) + tint * luminance * TINT
 
     out[~grid["mask"]] = 0
     return np.clip(out, 0, 255).astype(np.uint8)
