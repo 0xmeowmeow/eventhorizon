@@ -114,6 +114,11 @@ luminet spin --incl 0.9 --hotspots 20
 luminet spin --gif out.gif      # a file, so a loop
 ```
 
+`e` cycles the encoding: full-colour half blocks, then sextants and braille,
+which trade colour for finer dots, then `plot1979` - cream dots on black whose
+density carries the tone, in the spirit of the inked figure in the original
+paper. `y` sets it wandering through the settings on its own.
+
 It reshapes itself when the window does, and takes keys while running: `p`
 palette, `b`/`B` bloom, `c`/`C` arms in the gas, `s`/`S` speed, `g` stars, `d`
 dither, `n` scanlines, `v` vignette, `a` antialiasing, `space` pause, `h` for

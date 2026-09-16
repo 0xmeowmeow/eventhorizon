@@ -82,15 +82,22 @@ def rasterise(orders, width, height, extent=None, slack=1.6):
     """
     from scipy.spatial import cKDTree
 
+    from luminet.spin import fit_extent
+
     extent = extent or extent_of(orders)
-    xs = np.linspace(-extent, extent, width)
-    ys = np.linspace(extent, -extent, height)      # first row is the top
+    # Keep the picture in proportion whatever shape the grid is.
+    if isinstance(extent, (tuple, list)):
+        extent_x, extent_y = fit_extent(extent[0], width, height, reach_y=extent[1])
+    else:
+        extent_x, extent_y = fit_extent(extent, width, height)
+    xs = np.linspace(-extent_x, extent_x, width)
+    ys = np.linspace(extent_y, -extent_y, height)  # first row is the top
     gx, gy = np.meshgrid(xs, ys)
     targets = np.column_stack([gx.ravel(), gy.ravel()])
 
     # A cell may reach about as far as the coarser axis, or dense sampling on
     # one axis would punch holes along the other.
-    spacing = max(2 * extent / max(width - 1, 1), 2 * extent / max(height - 1, 1))
+    spacing = max(2 * extent_x / max(width - 1, 1), 2 * extent_y / max(height - 1, 1))
     cutoff = spacing * slack
 
     out = {k: np.full((height, width), np.nan) for k in CHANNELS}

@@ -218,6 +218,10 @@ def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
     """
     radii, angles = mapping["radii"], mapping["angles"]
     bh = mapping["bh"]
+    if isinstance(extent, (tuple, list)):
+        extent_x, extent_y = fit_extent(extent[0], width, height, reach_y=extent[1])
+    else:
+        extent_x, extent_y = fit_extent(extent, width, height)
 
     gas = np.zeros((height, width))
     gas_n = np.zeros((height, width))
@@ -261,8 +265,8 @@ def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
             x = b[good] * np.sin(angle[good])
             y = -b[good] * np.cos(angle[good])
 
-            col_i = ((x / extent + 1) / 2 * (width - 1)).astype(int)
-            row_i = ((-y / extent + 1) / 2 * (height - 1)).astype(int)
+            col_i = ((x / extent_x + 1) / 2 * (width - 1)).astype(int)
+            row_i = ((-y / extent_y + 1) / 2 * (height - 1)).astype(int)
             inside = (col_i >= 0) & (col_i < width) & (row_i >= 0) & (row_i < height)
             inside &= np.isfinite(flux)
             if not inside.any():
@@ -295,12 +299,49 @@ def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
     }
 
 
+# A half-block subpixel in kitty and Ghostty is 10 wide by 11 tall, so it is
+# very slightly taller than it is wide. Everything else assumes square samples.
+CELL_ASPECT = 10.0 / 11.0
+
+
+def fit_extent(extent, width, height, cell_aspect=CELL_ASPECT, reach_y=None):
+    """Physical half-width and half-height that keep the picture in proportion.
+
+    A terminal window is whatever shape somebody dragged it to, and mapping a
+    fixed region onto it regardless stretches the disk to fill, which is why a
+    wide short window squashed it.
+
+    Fitting a square region instead keeps the shape but wastes most of a wide
+    window, because an inclined disk is far wider than it is tall. So the disk's
+    own bounding box is what gets fitted: the scale is whichever axis runs out
+    first, and the other simply shows more empty sky.
+    """
+    reach_y = extent if reach_y is None else max(reach_y, 1e-6)
+    on_screen_w = width * cell_aspect
+    on_screen_h = height
+
+    # Scale so the box fits both ways, then let the roomier axis show more sky.
+    extent_y = max(reach_y, extent * on_screen_h / on_screen_w)
+    extent_x = extent_y * on_screen_w / on_screen_h
+    return extent_x, extent_y
+
+
 def reach(mapping, orders=(0, 1)):
-    """How far the image extends, so every frame shares one scale."""
-    biggest = 1.0
+    """How far the image extends across and down, so every frame shares a scale.
+
+    Returned as (x, y): an inclined disk is much wider than it is tall, and
+    knowing both is what lets a wide window be filled rather than padded.
+    """
+    angles = mapping["angles"]
+    rx = ry = 1.0
     for order in orders:
-        if order in mapping["tables"]:
-            b = mapping["tables"][order][0]
-            if np.isfinite(b).any():
-                biggest = max(biggest, float(np.nanmax(b)))
-    return biggest * 1.02
+        if order not in mapping["tables"]:
+            continue
+        b = mapping["tables"][order][0]
+        if not np.isfinite(b).any():
+            continue
+        xs = np.abs(b * np.sin(angles)[None, :])
+        ys = np.abs(b * np.cos(angles)[None, :])
+        rx = max(rx, float(np.nanmax(xs)))
+        ry = max(ry, float(np.nanmax(ys)))
+    return rx * 1.04, ry * 1.06

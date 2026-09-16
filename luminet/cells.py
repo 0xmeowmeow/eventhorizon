@@ -120,6 +120,44 @@ def sextant(mask, foreground=(255, 255, 255), background=(0, 0, 0)):
     return "\n".join(lines)
 
 
+# Braille packs 2x4 dots into one cell: the finest grid the terminal offers
+# without leaving text behind. One dot is about 5x5.5px against a half block's
+# 10x11, so a single dot makes a convincingly small star. The cost is colour,
+# since a cell still carries only one foreground.
+BRAILLE_BITS = np.array([[0x01, 0x08],
+                         [0x02, 0x10],
+                         [0x04, 0x20],
+                         [0x40, 0x80]], dtype=np.uint8)
+
+
+def braille(mask, foreground=(235, 225, 205), background=(0, 0, 0)):
+    """Render a two-tone (H, W) mask at 2x4 dots per cell."""
+    mask = np.asarray(mask, dtype=bool)
+    height = mask.shape[0] - mask.shape[0] % 4
+    width = mask.shape[1] - mask.shape[1] % 2
+    block = mask[:height, :width].reshape(height // 4, 4, width // 2, 2)
+    bits = (block * BRAILLE_BITS[None, :, None, :]).sum(axis=(1, 3)).astype(np.uint16)
+
+    head = _rgb(*foreground) + _rgb(*background, background=True)
+    lines = []
+    for row in bits:
+        lines.append(head + "".join(chr(0x2800 + int(v)) for v in row) + RESET)
+    return "\n".join(lines)
+
+
+def stipple(values, strength=1.0):
+    """Turn a brightness field into dots, denser where it is brighter.
+
+    Luminet's 1979 figure was computed on an IBM 7040 and inked dot by dot onto
+    negative paper, so its tone is carried by how close together the dots are
+    rather than by how bright each one is. An ordered threshold reproduces that
+    and, unlike random dithering, holds still between frames instead of boiling.
+    """
+    h, w = values.shape
+    tile = np.tile(BAYER8 + 0.5, (h // 8 + 1, w // 8 + 1))[:h, :w]
+    return values * strength > tile
+
+
 # ------------------------------------------------------------------- colouring
 
 def downsample(rgb, factor):
@@ -212,7 +250,7 @@ def starfield(width, height, density=0.012, seed=11):
     ys = rng.integers(0, height, count)
     xs = rng.integers(0, width, count)
     # Mostly faint, a few bright: an even spread reads as noise.
-    field[ys, xs] = rng.random(count) ** 2.5
+    field[ys, xs] = rng.random(count) ** 4.0
     return field
 
 

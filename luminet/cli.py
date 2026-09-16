@@ -1107,6 +1107,15 @@ def build_parser():
     p.add_argument("--no-ghost", action="store_true", help="hide the second image")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--once", action="store_true", help="play one loop and stop")
+    p.add_argument("--encoding", default="half",
+                   choices=["half", "sextant", "braille", "plot1979"],
+                   help="half-block is full colour; sextant and braille trade colour for "
+                        "finer dots; plot1979 is the inked-dot look of the original figure")
+    p.add_argument("--cycle", action="store_true",
+                   help="wander through the settings on a timer, hands off")
+    p.add_argument("--cycle-every", type=float, default=12.0, help="seconds between changes")
+    p.add_argument("--star-cut", type=float, default=0.55,
+                   help="how bright a star must be to light a dot in the dot encodings")
     p.add_argument("--no-stars", action="store_true", help="no background star field")
     p.add_argument("--star-density", type=float, default=0.006)
     p.add_argument("--star-brightness", type=float, default=230.0)

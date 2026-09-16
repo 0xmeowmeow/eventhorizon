@@ -25,6 +25,18 @@ import numpy as np
 
 from luminet import cells, spin
 
+# How each encoding subdivides a cell, and whether it can carry colour.
+ENCODINGS = {
+    "half":    {"x": 1, "y": 2, "colour": True},
+    "sextant": {"x": 2, "y": 3, "colour": False},
+    "braille": {"x": 2, "y": 4, "colour": False},
+    "plot1979": {"x": 2, "y": 4, "colour": False},
+}
+ENCODING_CYCLE = ["half", "sextant", "braille", "plot1979"]
+
+# Luminet inked his 1979 figure dot by dot on negative paper; this is that.
+INK = (238, 230, 210)
+
 PALETTE_CYCLE = ["ember", "inferno", "magma", "amber", "phosphor", "ice",
                  "plasma", "cividis", "bone", "copper", "gameboy", "bw"]
 
@@ -45,6 +57,8 @@ HELP = [
     ("[  ]", "inclination  (re-solves)"),
     ("-  =", "disk size  (re-solves)"),
     (",  .", "mass  (re-solves)"),
+    ("e  E", "encoding: half, sextant, braille, 1979 plot"),
+    ("y", "cycle everything, hands off"),
     ("h  ?", "this list"),
 ]
 
@@ -63,6 +77,9 @@ class Live:
         self.scanlines_on = opts.scanlines
         self.vignette_on = opts.vignette
         self.feather_on = True
+        self.encoding = opts.encoding
+        self.cycling = opts.cycle
+        self.next_change = 0.0
         self.ss = max(1, opts.supersample)
         self.paused = False
         self.show_help = False
@@ -83,18 +100,27 @@ class Live:
         size = shutil.get_terminal_size((90, 28))
         self.cols = self.o.width or max(24, size.columns - 1)
         self.rows = self.o.height or max(8, size.lines - 2)
-        self.w, self.h = self.cols, self.rows * 2          # half-block
-        self.rw, self.rh = self.w * self.ss, self.h * self.ss
+        sub = ENCODINGS[self.encoding]
+        self.w, self.h = self.cols * sub["x"], self.rows * sub["y"]
+        # Only half-block needs supersampling: the others already sample well
+        # below a cell, which is what smooths their edges.
+        use_ss = self.ss if self.encoding == "half" else 1
+        self.rw, self.rh = self.w * use_ss, self.h * use_ss
+        self.use_ss = use_ss
 
         # Keep the gas at a constant density whatever the window is doing.
-        count = int(self.w * self.h * self.o.density * (2 if self.ss > 1 else 1))
+        count = int(self.w * self.h * self.o.density * (2 if self.use_ss > 1 else 1))
         self.parcels = spin.Parcels(self.mapping["radii"], count=count, seed=self.seed,
                                     infall=self.o.infall, clumps=self.clumps,
                                     depth=self.o.depth)
         # Stars are made at the size they are shown. Generated on the
         # supersampled grid they would be averaged down into grey smudges
         # instead of staying points.
+        # Two copies: the dot encodings can place a star on a single 5x5px dot,
+        # which is far smaller than half-block's 10x11 subpixel.
         self.stars = cells.starfield(self.w, self.h, self.o.star_density, self.seed + 5)
+        self.stars_shown = cells.starfield(self.cols, self.rows * 2,
+                                           self.o.star_density, self.seed + 5)
         self.resized = False
         sys.stdout.write("\033[2J\033[H")
 
@@ -133,13 +159,23 @@ class Live:
                           self.extent, None, orders, rates=self.rates,
                           gas_spread=self.o.gas_spread)
 
-        name = PALETTE_CYCLE[self.palette_at]
         from luminet import fields
 
         value = np.nan_to_num(fields.normalise(grid, "flux", gamma=self.o.gamma))
+
+        if not ENCODINGS[self.encoding]["colour"]:
+            # One colour per cell, so tone has to come from how many dots are
+            # lit rather than from how bright each one is.
+            lit = cells.stipple(value, 1.0) & grid["mask"]
+            if self.stars_on:
+                lit = lit | (self.stars > self.o.star_cut) & ~grid["mask"]
+            if self.encoding == "sextant":
+                return cells.sextant(lit, self.ink())
+            return cells.braille(lit, self.ink())
+
         if self.dither_on:
             value = cells.dither(value, 0.04)
-        img = cells._ramp(value, cells.palette(name)).astype(np.uint8)
+        img = cells._ramp(value, cells.palette(PALETTE_CYCLE[self.palette_at])).astype(np.uint8)
         img[~grid["mask"]] = 0
 
         if self.feather_on:
@@ -147,24 +183,32 @@ class Live:
         if self.bloom > 0:
             img = cells.bloom(img, self.bloom)
 
-        img = cells.downsample(img, self.ss)
+        img = cells.downsample(img, self.use_ss)
         if self.stars_on:
             covered = grid["mask"]
-            if self.ss > 1:
-                covered = covered[:self.h * self.ss, :self.w * self.ss].reshape(
-                    self.h, self.ss, self.w, self.ss).any(axis=(1, 3))
-            img = cells.add_stars(img, self.stars, covered, self.o.star_brightness)
+            if self.use_ss > 1:
+                covered = covered[:self.h * self.use_ss, :self.w * self.use_ss].reshape(
+                    self.h, self.use_ss, self.w, self.use_ss).any(axis=(1, 3))
+            img = cells.add_stars(img, self.stars_shown, covered, self.o.star_brightness)
         if self.scanlines_on:
             img = cells.scanlines(img, 0.22)
         if self.vignette_on:
             img = cells.vignette(img, 0.4)
         return cells.half_block(img)
 
+    def ink(self):
+        if self.encoding == "plot1979":
+            return INK
+        stops = cells.palette(PALETTE_CYCLE[self.palette_at])
+        return tuple(int(v) for v in stops[-1])
+
     def status(self):
         s = self.settings
         bits = [f"incl {s['incl']:.2f}", f"mass {s['mass']:.2f}",
-                f"disk {s['outer_edge']:.0f}", PALETTE_CYCLE[self.palette_at],
-                f"{self.cols}x{self.rows}"]
+                f"disk {s['outer_edge']:.0f}", self.encoding,
+                PALETTE_CYCLE[self.palette_at], f"{self.cols}x{self.rows}"]
+        if self.cycling:
+            bits.append("cycling")
         if self.paused:
             bits.append("PAUSED")
         return "  ".join(bits) + "   h for keys, q to quit"
@@ -211,6 +255,13 @@ class Live:
         elif key == "r":
             self.seed += 1
             self.resized = True
+        elif key in ("e", "E"):
+            at = ENCODING_CYCLE.index(self.encoding)
+            self.encoding = ENCODING_CYCLE[(at + (1 if key == "e" else -1)) % len(ENCODING_CYCLE)]
+            self.resized = True
+        elif key == "y":
+            self.cycling = not self.cycling
+            self.next_change = 0.0
         # Everything below changes the gravity, so the map has to be solved again.
         elif key in ("[", "]"):
             step = o.incl_step * (1 if key == "]" else -1)
@@ -226,6 +277,35 @@ class Live:
             self.solve(f"mass {s['mass']:.2f}")
             self.rebuild_rates()
         return True
+
+    def cycle(self):
+        """Hands off: wander through the settings on a timer.
+
+        Only the cheap ones change often. The gravity is stepped much more
+        rarely, because each step stops the picture to solve the map again.
+        """
+        if self.clock < self.next_change:
+            return
+        self.next_change = self.clock + self.o.cycle_every
+
+        self.step = getattr(self, "step", 0) + 1
+        if self.step % 2 == 1:
+            self.palette_at = (self.palette_at + 1) % len(PALETTE_CYCLE)
+        elif self.step % 6 == 2:
+            at = ENCODING_CYCLE.index(self.encoding)
+            self.encoding = ENCODING_CYCLE[(at + 1) % len(ENCODING_CYCLE)]
+            self.resized = True
+        elif self.step % 6 == 4:
+            self.bloom = 0.0 if self.bloom > 0.3 else 0.5
+        elif self.step % 12 == 0:
+            s = self.settings
+            step = self.o.incl_step * (1 if getattr(self, "tilt_up", True) else -1)
+            nxt = s["incl"] + step
+            if not 0.25 <= nxt <= 1.5:
+                self.tilt_up = not getattr(self, "tilt_up", True)
+                nxt = s["incl"] - step
+            s["incl"] = float(np.clip(nxt, 0.25, 1.5))
+            self.solve(f"inclination {s['incl']:.2f}")
 
     # ------------------------------------------------------------------- loop
 
@@ -246,6 +326,8 @@ class Live:
                     self.clock += now - last
                 last = now
 
+                if self.cycling:
+                    self.cycle()
                 if self.resized:
                     self.fit()
 
