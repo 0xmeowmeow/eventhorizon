@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from luminet import guide, notebook
 
@@ -553,6 +554,88 @@ def cmd_term(args):
     return 0
 
 
+def cmd_spin(args):
+    """Animate the disk turning, in the terminal."""
+    import numpy as np
+
+    from luminet import cells, fields, spin
+
+    size = shutil.get_terminal_size((96, 30))
+    width_cells = args.width or max(20, size.columns - 2)
+    height_cells = args.height or max(10, size.lines - 4)
+    width, height = width_cells, height_cells * 2      # half-block
+
+    settings = {**DEFAULTS, "radii": "", "ghost_radii": ""}
+    run = notebook.get(args.run) if args.run else None
+    if run:
+        settings.update(run["settings"])
+    for name in ("incl", "mass", "acc", "outer_edge"):
+        if getattr(args, name, None) is not None:
+            settings[name] = getattr(args, name)
+
+    orders = (0,) if args.no_ghost else (0, 1)
+    print(f"solving the lensing map once ({args.rings} rings) ...", end="", flush=True)
+    started = time.time()
+    mapping = spin.lensing_map(settings, n_rings=args.rings, n_angles=args.angles,
+                               orders=orders)
+    extent = spin.reach(mapping, orders)
+    turns = spin.ring_turns(mapping["radii"], float(settings["mass"]), args.frames,
+                            max_turns=args.max_turns)
+    parcels = spin.Parcels(mapping["radii"], count=args.parcels, seed=args.seed,
+                           infall=args.infall, clumps=args.clumps, depth=args.depth)
+    hotspots = None
+    if args.hotspots:
+        hotspots = spin.Parcels(mapping["radii"], count=args.hotspots,
+                                seed=args.seed + 1, infall=args.infall, clumps=0)
+    print(f" {time.time() - started:.0f}s")
+    print(f"  inner ring turns {turns[0]}x per loop, outer ring {turns[-1]}x")
+
+    print(f"pre-rendering {args.frames} frames ...", end="", flush=True)
+    started = time.time()
+    images = []
+    for i in range(args.frames):
+        grid = spin.frame(mapping, parcels, i / args.frames, width, height,
+                          extent, turns, orders, hotspots=hotspots,
+                          hot_gain=args.hot_gain, hot_spread=args.hot_spread)
+        images.append(cells.colourise(grid, args.channel))
+    print(f" {time.time() - started:.0f}s")
+
+    if args.save_frames:
+        from PIL import Image
+
+        out = Path(args.save_frames)
+        out.mkdir(parents=True, exist_ok=True)
+        for i, img in enumerate(images):
+            Image.fromarray(img).save(out / f"spin_{i:03d}.png")
+        print(f"wrote {len(images)} frames to {out}")
+        return 0
+
+    # Everything below is display: the physics is already done.
+    panes = [cells.half_block(img) for img in images]
+    delay = 1.0 / args.fps
+    print(f"\n{width}x{height} samples, {width_cells}x{height_cells} cells. "
+          f"ctrl-c to stop.\n")
+    sys.stdout.write("\033[?25l")           # hide the cursor
+    try:
+        first = True
+        while True:
+            for pane in panes:
+                if not first:
+                    sys.stdout.write(f"\033[{height_cells}A")   # back to the top
+                sys.stdout.write(pane + "\n")
+                sys.stdout.flush()
+                first = False
+                time.sleep(delay)
+            if args.once:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write("\033[?25h\n")
+        sys.stdout.flush()
+    return 0
+
+
 # ----------------------------------------------------------------------- menu
 
 def ask(prompt, default, cast=str, choices=None):
@@ -854,6 +937,40 @@ def build_parser():
     p.add_argument("--threshold", type=float, default=0.06,
                    help="sextant only: how bright a sample must be to light a subpixel")
     p.set_defaults(func=cmd_term)
+
+    p = sub.add_parser("spin", help="animate the disk turning, in the terminal")
+    p.add_argument("--channel", default="both",
+                   choices=["both", "flux", "redshift"], help="what the colour means")
+    p.add_argument("--frames", type=int, default=48, help="frames in one loop")
+    p.add_argument("--fps", type=int, default=20)
+    p.add_argument("--parcels", type=int, default=9000, help="how much gas to track")
+    p.add_argument("--rings", type=int, default=44, help="radii the map is solved at")
+    p.add_argument("--angles", type=int, default=180)
+    p.add_argument("--max-turns", type=int, default=None,
+                   help="cap on how many times the inner ring laps per loop")
+    p.add_argument("--infall", type=float, default=0.0,
+                   help="inward drift per loop, 0 to 1. Costs the exact loop")
+    p.add_argument("--clumps", type=int, default=3,
+                   help="how many bright patches to mark the gas with, so the rotation "
+                        "is visible. A tracer, not something the model predicts. 0 for none")
+    p.add_argument("--depth", type=float, default=0.75, help="how pronounced the patches are")
+    p.add_argument("--hotspots", type=int, default=14,
+                   help="bright spots carried round with the gas, so the rotation reads. "
+                        "A marker on the gas, not a prediction. 0 for none")
+    p.add_argument("--hot-gain", type=float, default=55.0, help="how bright those spots are")
+    p.add_argument("--hot-spread", type=float, default=1.3, help="how many cells each covers")
+    p.add_argument("--no-ghost", action="store_true", help="hide the second image")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--once", action="store_true", help="play one loop and stop")
+    p.add_argument("--run", type=int, help="settings from a recorded run")
+    p.add_argument("--incl", type=float)
+    p.add_argument("--mass", type=float)
+    p.add_argument("--acc", type=float)
+    p.add_argument("--outer-edge", type=float)
+    p.add_argument("--width", type=int)
+    p.add_argument("--height", type=int)
+    p.add_argument("--save-frames", help="write the frames as PNGs instead of playing")
+    p.set_defaults(func=cmd_spin)
 
     sub.add_parser("tui", help="the interactive instrument: parameters and a live preview")
     sub.add_parser("menu", help="the prompt-based menu")

@@ -106,6 +106,33 @@ luminet note 4 'ghost image separates here'
 luminet show 4                  # redraw an earlier run and its lineage
 ```
 
+### The disk turning
+
+```shell
+luminet spin                    # animates in the terminal, ctrl-c to stop
+luminet spin --incl 0.9 --hotspots 20
+luminet spin --no-ghost --channel flux
+```
+
+The renderer is time-averaged and the disk is axially symmetric, so turning the
+picture changes nothing. What moves is the gas. The lensing map is solved once -
+where light from each (radius, angle) lands, and what it costs in energy - and
+parcels of gas are then carried around that fixed map, which is free per frame.
+A parcel climbing over the top of the shadow does so because the map bends its
+light that way, and it brightens on the approaching side because its own
+redshift factor says so.
+
+Parcels orbit at the Schwarzschild rate, `omega = sqrt(M/r^3)`, so the inner
+disk laps the outer. Turns per loop are rounded to whole numbers so the loop
+closes exactly, which costs a little accuracy in each ring's rate but never the
+ordering.
+
+The bright spots are a marker on the gas, not a prediction. Smooth gas cannot
+show rotation - spread evenly it looks identical at every phase, and a clumped
+pattern shears and averages away, because each screen position stacks light from
+many radii turning at different rates. `--hotspots 0` removes them and the
+rotation becomes invisible, which is worth seeing once.
+
 ### Drawing in the terminal
 
 ```shell
