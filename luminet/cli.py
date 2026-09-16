@@ -13,8 +13,13 @@ import subprocess
 import sys
 import time
 
-PLOTS = ["image", "isoradials", "isoredshifts", "isofluxlines"]
+PLOTS = ["image", "lines", "isoradials", "isoredshifts", "isofluxlines"]
 COLOR_BY = ["flux", "redshift"]
+
+# Radii behind the line drawing in the docs. Ghost radii may exceed the disk's
+# outer edge: light from far material still wraps into view behind the hole.
+LINE_RADII = [6, 10, 15, 20]
+LINE_GHOST_RADII = [6, 20, 50, 100]
 
 DEFAULTS = {
     "mass": 1.0,
@@ -25,6 +30,8 @@ DEFAULTS = {
     "plot": "image",
     "cmap": "",
     "color_by": "flux",
+    "line_color": "white",
+    "lw": 1.0,
 }
 
 # Parameters a sweep can vary, and how to read one value of each.
@@ -37,6 +44,8 @@ SWEPT = {
     "plot": str,
     "cmap": str,
     "color_by": str,
+    "line_color": str,
+    "lw": float,
 }
 
 
@@ -102,6 +111,13 @@ def build(settings):
     )
 
 
+def parse_radii(raw, fallback):
+    """Read a comma-separated list of radii, falling back when none is given."""
+    if raw is None or not str(raw).strip():
+        return list(fallback)
+    return [float(v) for v in str(raw).split(",") if v.strip()]
+
+
 def draw(ax, settings):
     """Draw one black hole onto an existing polar axis."""
     import numpy as np
@@ -110,7 +126,16 @@ def draw(ax, settings):
     kwargs = {"cmap": settings["cmap"]} if settings["cmap"] else {}
     mode = settings["plot"]
 
-    if mode == "image":
+    if mode == "lines":
+        # The classic Luminet line drawing: plain isoradials, direct image above
+        # and ghost image below. plot_isoradials always builds a flux gradient,
+        # but an explicit `colors` overrides it with one flat colour.
+        bh.plot_isoradials(
+            direct_r=parse_radii(settings.get("radii"), LINE_RADII),
+            ghost_r=parse_radii(settings.get("ghost_radii"), LINE_GHOST_RADII),
+            ax=ax, colors=settings["line_color"], lw=settings["lw"],
+        )
+    elif mode == "image":
         radii = np.linspace(bh.disk_inner_edge, bh.disk_outer_edge, settings["resolution"])
         bh.plot_isoradials(direct_r=radii, ghost_r=radii,
                            color_by=settings["color_by"], ax=ax, **kwargs)
@@ -131,6 +156,8 @@ def draw(ax, settings):
 def cmd_render(args):
     """Render a single black hole."""
     settings = {k: getattr(args, k) for k in DEFAULTS}
+    settings["radii"] = getattr(args, "radii", "")
+    settings["ghost_radii"] = getattr(args, "ghost_radii", "")
     headless = args.view != "window"
     plt = _pyplot(headless)
 
@@ -199,6 +226,8 @@ def cmd_sweep(args):
 
     for (r, row_value), (c, col_value) in itertools.product(enumerate(rows), enumerate(cols)):
         settings = {name: vals[0] for name, vals in values.items()}
+        settings["radii"] = getattr(args, "radii", "")
+        settings["ghost_radii"] = getattr(args, "ghost_radii", "")
         if col_name:
             settings[col_name] = col_value
         if row_name:
@@ -292,9 +321,15 @@ def ask_common(args, sweeping=False):
                           DEFAULTS["outer_edge"], str if sweeping else float)
     args.resolution = ask(f"resolution, higher is slower{note}",
                           DEFAULTS["resolution"], str if sweeping else int)
-    args.color_by = ask(f"colour by{note}", DEFAULTS["color_by"],
-                        str, COLOR_BY if not sweeping else None)
-    args.cmap = ask(f"colormap, blank for the default{note}", DEFAULTS["cmap"], str)
+    if "lines" in str(args.plot):
+        args.line_color = ask(f"line colour{note}", DEFAULTS["line_color"], str)
+        args.lw = ask(f"line width{note}", DEFAULTS["lw"], str if sweeping else float)
+        args.radii = ask(f"radii, blank for {LINE_RADII}", "", str)
+        args.ghost_radii = ask(f"ghost radii, blank for {LINE_GHOST_RADII}", "", str)
+    if str(args.plot) != "lines":
+        args.color_by = ask(f"colour by{note}", DEFAULTS["color_by"],
+                            str, COLOR_BY if not sweeping else None)
+        args.cmap = ask(f"colormap, blank for the default{note}", DEFAULTS["cmap"], str)
     return args
 
 
@@ -342,6 +377,7 @@ def menu():
 
         args = argparse.Namespace(**DEFAULTS)
         args.dpi, args.tile, args.seed, args.ghost = 110, 3.0, None, False
+        args.radii, args.ghost_radii = "", ""
 
         print()
         if choice in ("1", "render"):
@@ -395,6 +431,14 @@ def add_common(p, sweeping):
                    help=f"matplotlib colormap, e.g. inferno{note}")
     p.add_argument("--color-by", default=DEFAULTS["color_by"],
                    help=f"one of {', '.join(COLOR_BY)}{note}")
+    p.add_argument("--line-color", default=DEFAULTS["line_color"],
+                   help=f"colour of the lines drawn by --plot lines{note}")
+    p.add_argument("--lw", type=kind or float, default=DEFAULTS["lw"],
+                   help=f"line width for --plot lines{note}")
+    p.add_argument("--radii", default="",
+                   help=f"comma-separated radii for --plot lines, default {LINE_RADII}")
+    p.add_argument("--ghost-radii", default="",
+                   help=f"comma-separated ghost radii, default {LINE_GHOST_RADII}")
 
 
 def add_view(p, default_output, allow_window):
