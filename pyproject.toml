@@ -19,6 +19,9 @@ license = { text = "MIT" }
 
 [project.optional-dependencies]
 tui = ["textual>=1.0", "textual-image>=0.6"]
+# Compiles the per-frame loop: about half the CPU. Without it plot1979 still
+# works, on plain numpy.
+fast = ["numba>=0.60"]
 
 [project.scripts]
 luminet = "luminet.cli:main"

@@ -175,6 +175,10 @@ class Live:
             self.extent = spin.reach(self.mapping, orders)
         self.rates = spin.true_rates(self.mapping["radii"],
                                      float(self.settings["mass"]), self.speed)
+        from luminet import fast
+
+        self.projector = (fast.Projector(self.mapping, orders)
+                          if fast.available and not self.o.no_compile else None)
         sys.stdout.write("\r\033[2K")
         self.resized = True
 
@@ -250,7 +254,7 @@ class Live:
         orders = (0,) if self.o.no_ghost else (0, 1)
         lit, brightness = spin.dots(self.mapping, self.dust, self.clock, self.w, self.h,
                                     self.extent, self.rates, orders,
-                                    gamma=self.o.ink_gamma)
+                                    gamma=self.o.ink_gamma, projector=self.projector)
         name = PALETTE_CYCLE[self.palette_at]
         if name == "ink":
             return cells.braille(lit, INK, PAPER)
@@ -301,6 +305,8 @@ class Live:
                 PALETTE_CYCLE[self.palette_at], f"{self.cols}x{self.rows}"]
         if self.cycling:
             bits.append("cycling")
+        if self.encoding == "plot1979":
+            bits.append("compiled" if self.projector is not None else "numpy")
         if self.paused:
             bits.append("PAUSED")
         return "  ".join(bits) + "   h for keys, q to quit"

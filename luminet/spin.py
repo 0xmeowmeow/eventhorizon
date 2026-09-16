@@ -348,7 +348,7 @@ def fit_extent(extent, width, height, cell_aspect=CELL_ASPECT, reach_y=None):
 
 
 def dots(mapping, parcels, phase, width, height, extent, rates, orders=(0, 1),
-         gamma=0.85, smooth=1.4):
+         gamma=0.85, smooth=1.4, projector=None):
     """Light individual dots from the gas, for the 1979 look.
 
     The dots are the material, so they orbit and the disk visibly turns without
@@ -377,6 +377,11 @@ def dots(mapping, parcels, phase, width, height, extent, rates, orders=(0, 1),
         extent_x, extent_y = fit_extent(extent[0], width, height, reach_y=extent[1])
     else:
         extent_x, extent_y = fit_extent(extent, width, height)
+
+    if projector is not None:
+        # The compiled pass: same samples, same cells, one fused loop.
+        idx, flux, luck = projector(parcels, phase, rates, extent_x, extent_y, width, height)
+        return _light(idx, flux, luck, width, height, gamma, smooth)
 
     ring, r, angle = parcels.at(phase, radii, None, rates)
     upper = np.minimum(ring + 1, len(radii) - 1)
@@ -414,12 +419,17 @@ def dots(mapping, parcels, phase, width, height, extent, rates, orders=(0, 1),
         flux_all.append(flux[inside])
         luck_all.append(parcels.luck[good][inside])
 
-    lit = np.zeros(height * width, dtype=bool)
     if not idx_all:
+        return np.zeros((height, width), dtype=bool), np.zeros((height, width))
+    return _light(np.concatenate(idx_all), np.concatenate(flux_all),
+                  np.concatenate(luck_all), width, height, gamma, smooth)
+
+
+def _light(idx, flux, luck, width, height, gamma, smooth):
+    """From every sample's cell and flux, decide which dots to light."""
+    lit = np.zeros(height * width, dtype=bool)
+    if idx.size == 0:
         return lit.reshape(height, width), np.zeros((height, width))
-    idx = np.concatenate(idx_all)
-    flux = np.concatenate(flux_all)
-    luck = np.concatenate(luck_all)
 
     count = np.bincount(idx, minlength=height * width)
     total = np.bincount(idx, weights=flux, minlength=height * width)

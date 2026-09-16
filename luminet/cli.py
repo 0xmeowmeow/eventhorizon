@@ -1111,6 +1111,8 @@ def build_parser():
                    choices=["half", "sextant", "braille", "plot1979"],
                    help="half-block is full colour; sextant and braille trade colour for "
                         "finer dots; plot1979 is the inked-dot look of the original figure")
+    p.add_argument("--no-compile", action="store_true",
+                   help="use the plain numpy path even if numba is installed")
     p.add_argument("--dot-gamma", type=float, default=0.5,
                    help="sextant and braille: below 1 lights more dots in the dim disk")
     p.add_argument("--ink-gamma", type=float, default=0.6,
