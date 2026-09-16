@@ -106,6 +106,23 @@ luminet note 4 'ghost image separates here'
 luminet show 4                  # redraw an earlier run and its lineage
 ```
 
+### Looping animations
+
+```shell
+luminet animate incl 0.15 1.5           # a turntable loop, out and back
+luminet animate --between 3 7           # between two recorded runs
+luminet animate incl 0.2 1.4 --final -o orbit.mp4
+```
+
+Frames are rendered once from one end to the other and played back in reverse,
+so the loop closes exactly rather than nearly: the last frame's neighbour is the
+first. That also halves the work. Writes `.gif`, `.mp4` or `.webp`.
+
+Why out and back rather than all the way round: the renderer produces the same
+image for `incl`, `pi - incl`, `pi + incl` and `2*pi - incl`, so only 0 to pi/2
+is distinct and a one-directional cycle would just retrace itself. In the TUI,
+`a` animates between the pinned baseline and what is on screen.
+
 The notebook keeps settings and notes, not pictures: settings fully determine the
 image, so any past run can be drawn again from `notebook/runs.json`.
 

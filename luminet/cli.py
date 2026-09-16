@@ -448,6 +448,59 @@ def cmd_tui(args):
     return tui.run()
 
 
+def cmd_animate(args):
+    """Pre-render a loop between two settings."""
+    from luminet import animate
+
+    if args.control:
+        base = notebook.get(args.run) if args.run else notebook.latest()
+        settings = dict(base["settings"]) if base else {**DEFAULTS, "radii": "", "ghost_radii": ""}
+        start = {**settings, args.control: notebook.cast(args.control, args.start)}
+        end = {**settings, args.control: notebook.cast(args.control, args.end)}
+        what = f"{args.control} {args.start} to {args.end}"
+    else:
+        if args.between:
+            try:
+                a, b = animate.endpoints_from_runs(*args.between)
+            except ValueError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 2
+            start, end = a, b
+            what = f"run {args.between[0]} to run {args.between[1]}"
+        else:
+            runs = notebook.load()
+            if len(runs) < 2:
+                print("nothing to animate between yet. Render two things, or name a\n"
+                      "control and two values: luminet animate incl 0.2 1.5",
+                      file=sys.stderr)
+                return 2
+            start, end = dict(runs[-2]["settings"]), dict(runs[-1]["settings"])
+            what = f"run {runs[-2]['id']} to run {runs[-1]['id']}"
+
+    if args.final:
+        start["resolution"] = end["resolution"] = max(int(end.get("resolution") or 100), 300)
+        args.frames = max(args.frames, 60)
+        args.dpi = max(args.dpi, 200)
+
+    print(f"animating {what}, {args.frames} frames"
+          f"{' then back' if not args.once else ''} at {args.fps}fps")
+    try:
+        out, total = animate.build(
+            start, end, args.output, frames=args.frames, fps=args.fps, dpi=args.dpi,
+            bounce=not args.once, jobs=args.jobs, keep_frames=args.keep_frames,
+        )
+    except (ValueError, RuntimeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    seconds = total / args.fps
+    print(f"wrote {styled(str(out), BOLD)}  {total} frames, {seconds:.1f}s"
+          f"{', loops seamlessly' if not args.once else ''}")
+    if args.view == "kitty" and not show_in_kitty(out):
+        print(f"view it with:  kitten icat {out}")
+    return 0
+
+
 # ----------------------------------------------------------------------- menu
 
 def ask(prompt, default, cast=str, choices=None):
@@ -709,6 +762,26 @@ def build_parser():
     p.add_argument("run", type=int)
     p.add_argument("text")
     p.set_defaults(func=cmd_note)
+
+    p = sub.add_parser("animate", help="pre-render a loop between two settings")
+    p.add_argument("control", nargs="?", help="one control to move, e.g. incl")
+    p.add_argument("start", nargs="?", help="its value at one end")
+    p.add_argument("end", nargs="?", help="its value at the other end")
+    p.add_argument("--between", nargs=2, type=int, metavar=("A", "B"),
+                   help="animate between two recorded runs instead")
+    p.add_argument("--run", type=int, help="which run supplies the other settings")
+    p.add_argument("--frames", type=int, default=30, help="frames on the way out")
+    p.add_argument("--fps", type=int, default=20)
+    p.add_argument("--dpi", type=int, default=110)
+    p.add_argument("--jobs", type=int, default=4, help="how many frames to render at once")
+    p.add_argument("--once", action="store_true",
+                   help="play straight through instead of returning; will not loop cleanly")
+    p.add_argument("--final", action="store_true",
+                   help="high resolution, more frames: for the finished piece")
+    p.add_argument("--keep-frames", help="keep the individual frames in this directory")
+    p.add_argument("-o", "--output", default="loop.gif", help=".gif, .mp4 or .webp")
+    p.add_argument("--view", default="kitty" if in_kitty() else "file", choices=["kitty", "file"])
+    p.set_defaults(func=cmd_animate)
 
     sub.add_parser("tui", help="the interactive instrument: parameters and a live preview")
     sub.add_parser("menu", help="the prompt-based menu")

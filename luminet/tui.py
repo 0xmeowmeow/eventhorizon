@@ -175,6 +175,7 @@ class LuminetTUI(App):
         Binding("right,l", "change(1)", "raise"),
         Binding("r,enter", "render", "render"),
         Binding("space", "pin", "pin as baseline"),
+        Binding("a", "animate", "animate baseline -> current"),
         Binding("n", "note", "note"),
         Binding("question_mark", "explain", "explain"),
         Binding("q,escape", "quit", "quit"),
@@ -298,6 +299,35 @@ class LuminetTUI(App):
                 self.refresh_status(f"noted on run {self.current_run['id']}")
 
         self.push_screen(NotePrompt(), keep)
+
+    def action_animate(self) -> None:
+        """Loop between the pinned baseline and what is on screen now."""
+        if self.baseline is None or self.current_run is None:
+            self.notify("pin a baseline with space, change something, then press a", timeout=4)
+            return
+        if self.busy:
+            return
+        self.busy = True
+        out = notebook.NOTEBOOK_DIR / f"loop_{self.baseline['id']:03d}_{self.current_run['id']:03d}.gif"
+        self.refresh_status("[b]rendering the loop ...[/b]")
+        self.do_animate(dict(self.baseline["settings"]), dict(self.settings), out)
+
+    @work(thread=True, exclusive=True)
+    def do_animate(self, start, end, out) -> None:
+        from luminet import animate
+
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            path, total = animate.build(start, end, out, frames=24, fps=20,
+                                        dpi=100, jobs=4, progress=False)
+            message = f"wrote {path.name}, {total} frames, loops seamlessly"
+        except (ValueError, RuntimeError) as e:
+            message = f"[red]{e}[/red]"
+        self.call_from_thread(self.animated, message)
+
+    def animated(self, message) -> None:
+        self.busy = False
+        self.refresh_status(message)
 
     def action_render(self) -> None:
         if self.busy:
