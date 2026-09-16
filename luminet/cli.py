@@ -1092,9 +1092,9 @@ def build_parser():
                         "visible. The patches are a tracer the model does not predict; the "
                         "way they shear into arms is real differential rotation. 0 for none")
     p.add_argument("--depth", type=float, default=0.9, help="how pronounced the pattern is")
-    p.add_argument("--palette", default="ember",
-                   help="colour ramp: ember, phosphor, amber, ice, gameboy, mono, bw, "
-                        "redshift, or any matplotlib colormap such as inferno or magma")
+    p.add_argument("--palette", default="ink",
+                   help="colour ramp: ink (the 1979 figure), ember, phosphor, amber, ice, "
+                        "gameboy, mono, bw, redshift, or any matplotlib colormap such as inferno")
     p.add_argument("--bloom", type=float, default=0.0,
                    help="let the bright parts spill into their surroundings, 0 to about 1.5")
     p.add_argument("--hotspots", type=int, default=0,
@@ -1107,7 +1107,7 @@ def build_parser():
     p.add_argument("--no-ghost", action="store_true", help="hide the second image")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--once", action="store_true", help="play one loop and stop")
-    p.add_argument("--encoding", default="half",
+    p.add_argument("--encoding", default="plot1979",
                    choices=["half", "sextant", "braille", "plot1979"],
                    help="half-block is full colour; sextant and braille trade colour for "
                         "finer dots; plot1979 is the inked-dot look of the original figure")

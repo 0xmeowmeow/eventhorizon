@@ -368,7 +368,8 @@ def dots(mapping, parcels, phase, width, height, extent, rates, orders=(0, 1),
     is kept with 1 - (1 - target) ** (1 / count). A parcel's chance is fixed for
     its life, so dots do not flicker from frame to frame.
 
-    Returns a boolean (height, width) array of lit dots.
+    Returns (lit, brightness): which dots to light, and the 0..1 brightness
+    of each dot's cell, which a palette can colour.
     """
     radii, angles = mapping["radii"], mapping["angles"]
     bh = mapping["bh"]
@@ -415,7 +416,7 @@ def dots(mapping, parcels, phase, width, height, extent, rates, orders=(0, 1),
 
     lit = np.zeros(height * width, dtype=bool)
     if not idx_all:
-        return lit.reshape(height, width)
+        return lit.reshape(height, width), np.zeros((height, width))
     idx = np.concatenate(idx_all)
     flux = np.concatenate(flux_all)
     luck = np.concatenate(luck_all)
@@ -440,7 +441,7 @@ def dots(mapping, parcels, phase, width, height, extent, rates, orders=(0, 1),
     n = np.maximum(count[idx], 1)
     chance = 1.0 - (1.0 - target[idx]) ** (1.0 / n)
     lit[idx[luck < chance]] = True
-    return lit.reshape(height, width)
+    return lit.reshape(height, width), target.reshape(height, width)
 
 
 def reach(mapping, orders=(0, 1), max_radius=None):

@@ -38,7 +38,7 @@ ENCODING_CYCLE = ["half", "sextant", "braille", "plot1979"]
 INK = (238, 230, 210)
 PAPER = (14, 16, 13)     # the print is not quite black
 
-PALETTE_CYCLE = ["ember", "inferno", "magma", "amber", "phosphor", "ice",
+PALETTE_CYCLE = ["ink", "ember", "inferno", "magma", "amber", "phosphor", "ice",
                  "plasma", "cividis", "bone", "copper", "gameboy", "bw"]
 
 HELP = [
@@ -248,9 +248,22 @@ class Live:
         thinly, because the disk solved for this mode runs far past its edges.
         """
         orders = (0,) if self.o.no_ghost else (0, 1)
-        lit = spin.dots(self.mapping, self.dust, self.clock, self.w, self.h,
-                        self.extent, self.rates, orders, gamma=self.o.ink_gamma)
-        return cells.braille(lit, INK, PAPER)
+        lit, brightness = spin.dots(self.mapping, self.dust, self.clock, self.w, self.h,
+                                    self.extent, self.rates, orders,
+                                    gamma=self.o.ink_gamma)
+        name = PALETTE_CYCLE[self.palette_at]
+        if name == "ink":
+            return cells.braille(lit, INK, PAPER)
+
+        # Any other palette colours each cell by the light falling in it. The
+        # spacing of the dots already carries the tone, so the colour is lifted
+        # well off black: a faint cell given a dark colour would lose the very
+        # dots that show it is faint.
+        sy, sx = 4, 2
+        b = brightness[:self.rows * sy, :self.cols * sx].reshape(self.rows, sy, self.cols, sx)
+        tone = 0.4 + 0.6 * np.clip(b.max(axis=(1, 3)), 0.0, 1.0) ** 0.5
+        colours = cells._ramp(tone, cells.palette(name)).astype(np.uint8)
+        return cells.braille(lit, INK, PAPER, colours=colours)
 
     def cell_colours(self, value, mask, star_dots):
         """A palette colour for each cell, from the light that falls in it.

@@ -215,6 +215,8 @@ TINT = 0.55   # how far the redshift is allowed to colour the flux image
 # terminal aesthetics taxonomy; any of matplotlib's 182 colormaps works too,
 # by name.
 PALETTES = {
+    # The 1979 figure: every dot the same cream, the tone carried by spacing.
+    "ink": [(236, 232, 210), (236, 232, 210)],
     "ember": [(0, 0, 0), (70, 40, 20), (190, 120, 45), (255, 220, 150), (255, 255, 255)],
     "phosphor": [(0, 0, 0), (0, 35, 12), (0, 150, 60), (130, 255, 175), (225, 255, 240)],
     "amber": [(0, 0, 0), (40, 18, 0), (170, 85, 0), (255, 185, 55), (255, 240, 200)],
