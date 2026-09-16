@@ -12,7 +12,7 @@ import numpy as np
 from luminet import black_hole_math as bhmath
 from luminet.isoradial import Isoradial
 from luminet.isoredshift import Isoredshift
-from luminet.photon import Photon
+from luminet.photon import Photon, sample_photon
 
 
 class BlackHole:
@@ -452,7 +452,7 @@ class BlackHole:
                 )
         return ax
 
-    def sample_photons(self, n_points=1000) -> Tuple[Photon]:
+    def sample_photons(self, n_points=1000, seed=None) -> Tuple[Photon]:
         r"""Sample points on the accretion disk.
 
         Photons are appended as class-level attributes.
@@ -466,6 +466,10 @@ class BlackHole:
 
         Args:
             n_points (int): Amount of photons to sample.
+            seed: Seed for the sampling. Anything :class:`numpy.random.SeedSequence`
+                accepts, e.g. an :py:class:`int`. Pass one to make sampling
+                reproducible. Defaults to :py:data:`None`, which draws fresh
+                entropy from the OS.
 
         Attention:
             Sampling is not done uniformly, but biased towards the
@@ -478,20 +482,30 @@ class BlackHole:
         n_points = int(n_points)
         min_radius_ = self.disk_inner_edge
         max_radius_ = self.disk_outer_edge
+
+        # Every worker needs its own independent random stream. Workers started
+        # with the 'fork' start method inherit a copy of the parent's global
+        # numpy RNG state, so drawing from np.random inside them yields the very
+        # same numbers in every worker, and the sample collapses onto a handful
+        # of distinct photons. Spawning one SeedSequence per photon keeps the
+        # streams independent whatever the start method is, and makes sampling
+        # reproducible through `seed`.
+        seeds = np.random.SeedSequence(seed).spawn(2 * n_points)
+
         with Pool() as p:
             photons = p.starmap(
                 sample_photon,
                 [
-                    (min_radius_, max_radius_, self.incl, self.mass, 0)
-                    for _ in range(n_points)
+                    (min_radius_, max_radius_, self.incl, self.mass, 0, s)
+                    for s in seeds[:n_points]
                 ],
             )
         with Pool() as p:
             ghost_photons = p.starmap(
                 sample_photon,
                 [
-                    (min_radius_, max_radius_, self.incl, self.mass, 1)
-                    for _ in range(n_points)
+                    (min_radius_, max_radius_, self.incl, self.mass, 1, s)
+                    for s in seeds[n_points:]
                 ],
             )
 
@@ -517,45 +531,6 @@ class BlackHole:
         self.ghost_photons = ghost_photons
 
         return photons, ghost_photons
-
-def sample_photon(min_r, max_r, incl, bh_mass, n):
-    r"""Sample a random photon from the accretion disk
-
-    Each photon is a dictionary with the following properties:
-
-    - ``radius``: radius of the photon on the accretion disk :math:`r`
-    - ``alpha``: angle of the photon on the accretion disk :math:`\alpha`
-    - ``impact_parameter``: impact parameter of the photon :math:`b`
-    - ``z_factor``: redshift factor of the photon :math:`1+z`
-
-    This function is used in :meth:`~luminet.black_hole.BlackHole.sample_photons` to sample
-    photons on the accretion disk of a black hole in a parallellized manner.
-
-    Attention:
-        Photons are not sampled uniformly on the accretion disk, but biased towards the center.
-        Black holes have more flux delta towards the center, and thus we need more precision there.
-        This makes the triangulation with hollow mask in the center also very happy.
-
-    Args:
-        min_r: minimum radius of the accretion disk
-        max_r: maximum radius of the accretion disk
-        incl: inclination of the observer wrt the disk
-        bh_mass: mass of the black hole
-        n: order of the isoradial
-
-    Returns:
-        Dict: Dictionary containing all basic properties of a single photon from the accretion disk.
-    """
-    alpha = np.random.random() * 2 * np.pi
-
-    # Bias sampling towards circle center (even sampling would be sqrt(random))
-    r = min_r + (max_r - min_r) * np.random.random()
-    b = bhmath.solve_for_impact_parameter(r, incl, alpha, bh_mass, n)
-    assert (
-        b is not np.nan
-    ), f"b is nan for r={r}, alpha={alpha}, incl={incl}, M={bh_mass}, n={n}"
-    # f_o = flux_observed(r, acc_r, bh_mass, redshift_factor_)
-    return Photon(radius=r, alpha=alpha, impact_parameter=b)
 
 def _call_calc_redshift_locations(ir, redshift):
     """Helper function for multiprocessing"""
