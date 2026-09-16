@@ -8,3 +8,6 @@ docs/build**
 docs/source/autoapi**
 # local virtualenv
 .venv
+
+# notebook images are redrawn from notebook/runs.json on demand
+notebook/*.png

@@ -67,6 +67,37 @@ radius  alpha   impact_parameter    z_factor    flux_o
 Note that sampling is biased towards the center of the black hole, since this is where most of the luminosity comes from.
 
 
+## 🔭 Exploring it from the terminal
+
+`luminet` opens a menu; every option is also a subcommand.
+
+```shell
+luminet explain            # what every control is and what it changes
+luminet explain incl       # just one of them
+luminet render --plot lines
+luminet sweep --incl 0.1,0.5,0.9,1.3,1.5
+```
+
+Start here if the controls mean nothing yet. These draw the same disk at the
+same angle, once with light travelling in straight lines and once with gravity
+bending it, which is the whole phenomenon in one comparison:
+
+```shell
+luminet sweep --plot flat,lines
+```
+
+Every render is recorded, so a session accumulates instead of restarting:
+
+```shell
+luminet log                     # what you have drawn, and what you noticed
+luminet vary 3 --incl 0.9       # run 3 again with one change, beside the original
+luminet note 4 'ghost image separates here'
+luminet show 4                  # redraw an earlier run and its lineage
+```
+
+The notebook keeps settings and notes, not pictures: settings fully determine the
+image, so any past run can be drawn again from `notebook/runs.json`.
+
 ## 📝 Background
 Swarzschild black holes have an innermost stable orbit of $6M$, and a photon sphere at $3M$. This means that
 the accretion disk orbiting the black hole emits photons at radii $r>6M$. As long as the photon perigee in curved space remains larger than $3M$ (also called the photon sphere), the photon is not captured by the black hole and can in theory be seen from some observer frame $(b, \alpha)$. The spacetime curvature is most easily interpreted as a lensing effect between the black hole frame $(r, \alpha)$ and the observer frame $(b, \alpha)$. The former are 2D polar coordinates that span the accretion disk area, and the latter are 2D polar coordinates that span the "photographic plate" of the observer frame. Think of the latter as a literal CCD camera. The photon orbit perigee and the radius in observer frame $b$ are directly related:

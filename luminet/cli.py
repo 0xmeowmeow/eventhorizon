@@ -13,7 +13,9 @@ import subprocess
 import sys
 import time
 
-PLOTS = ["image", "lines", "isoradials", "isoredshifts", "isofluxlines"]
+from luminet import guide, notebook
+
+PLOTS = ["image", "lines", "flat", "isoradials", "isoredshifts", "isofluxlines"]
 COLOR_BY = ["flux", "redshift"]
 
 # Radii behind the line drawing in the docs. Ghost radii may exceed the disk's
@@ -126,7 +128,17 @@ def draw(ax, settings):
     kwargs = {"cmap": settings["cmap"]} if settings["cmap"] else {}
     mode = settings["plot"]
 
-    if mode == "lines":
+    if mode == "flat":
+        # The Newtonian limit: what the disk would look like if light were not
+        # bent. Each ring is just a tilted circle, i.e. an ellipse, so the far
+        # side stays behind the hole and there is no second image.
+        from luminet import black_hole_math as bhmath
+
+        angles = np.linspace(0, 2 * np.pi, max(int(settings["resolution"]), 60))
+        for r in parse_radii(settings.get("radii"), LINE_RADII):
+            b = [bhmath.ellipse(r, a, settings["incl"]) for a in angles]
+            ax.plot(angles, b, color=settings["line_color"], lw=settings["lw"])
+    elif mode == "lines":
         # The classic Luminet line drawing: plain isoradials, direct image above
         # and ghost image below. plot_isoradials always builds a flux gradient,
         # but an explicit `colors` overrides it with one flat colour.
@@ -174,12 +186,20 @@ def cmd_render(args):
     draw(ax, settings)
     print(f" {time.time() - started:.0f}s")
 
+    run = notebook.record(settings, parent=getattr(args, "parent", None))
+    print(f"recorded as run {styled(str(run['id']), BOLD)}"
+          f"   (luminet vary {run['id']} --incl ... to build on it)")
+
     if args.view == "window":
         plt.show(block=True)
         return 0
 
-    fig.savefig(args.output, dpi=args.dpi, facecolor="black", bbox_inches="tight")
-    deliver(args.output, args.view)
+    path = notebook.image_path(run["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=args.dpi, facecolor="black", bbox_inches="tight")
+    if args.output:
+        fig.savefig(args.output, dpi=args.dpi, facecolor="black", bbox_inches="tight")
+    deliver(args.output or path, args.view)
     return 0
 
 
@@ -285,6 +305,115 @@ def cmd_photons(args):
     return 0
 
 
+def cmd_explain(args):
+    """Print what the controls are and what they do."""
+    print(guide.explain(args.control))
+    return 0
+
+
+def cmd_log(args):
+    """List what has been rendered so far."""
+    runs = notebook.load()
+    if not runs:
+        print("nothing recorded yet. `luminet render` records every run it draws.")
+        return 0
+    for run in runs[-args.limit:]:
+        parent = notebook.get(run["parent"]) if run.get("parent") else None
+        summary = notebook.describe(run, compared_to=parent)
+        lead = f"  {styled(str(run['id']).rjust(3), BOLD)}"
+        if parent:
+            print(f"{lead}  from {parent['id']}  {summary}")
+        else:
+            print(f"{lead}  {summary}")
+        if run.get("note"):
+            print(f"       {styled(run['note'], DIM)}")
+    print(f"\n  {styled('luminet show <n>', BOLD)} to redraw one, "
+          f"{styled('luminet vary <n> --incl 0.9', BOLD)} to change one thing,\n"
+          f"  {styled('luminet note <n> \'...\'', BOLD)} to keep an observation with it.")
+    return 0
+
+
+def cmd_show(args):
+    """Draw an earlier run again, from its recorded settings."""
+    run = notebook.get(args.run) if args.run else notebook.latest()
+    if run is None:
+        print("no such run. `luminet log` lists them.", file=sys.stderr)
+        return 2
+
+    for step in notebook.lineage(run["id"]):
+        parent = notebook.get(step["parent"]) if step.get("parent") else None
+        print(f"  run {step['id']}: {notebook.describe(step, compared_to=parent)}")
+        if step.get("note"):
+            print(f"    {styled(step['note'], DIM)}")
+
+    plt = _pyplot(headless=True)
+    fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+    ax.set_theta_zero_location("S")
+    fig.patch.set_facecolor("black")
+    ax.set_facecolor("black")
+    ax.axis("off")
+    draw(ax, run["settings"])
+    path = notebook.image_path(run["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=args.dpi, facecolor="black", bbox_inches="tight")
+    deliver(path, args.view)
+    return 0
+
+
+def cmd_vary(args):
+    """Repeat an earlier run with one thing changed, beside the original."""
+    base = notebook.get(args.run) if args.run else notebook.latest()
+    if base is None:
+        print("nothing recorded yet. Run `luminet render` first.", file=sys.stderr)
+        return 2
+
+    overrides = {k: notebook.cast(k, v) for k, v in vars(args).items()
+                 if k in notebook.RECORDED and v is not None}
+    if not overrides:
+        print("give at least one thing to change, for example --incl 0.9.\n"
+              "`luminet explain` lists what there is to change.", file=sys.stderr)
+        return 2
+
+    before = dict(base["settings"])
+    after = {**before, **overrides}
+    changed = notebook.differences(before, after)
+    label = ", ".join(f"{k}: {v[0]} -> {v[1]}" for k, v in changed.items())
+
+    plt = _pyplot(headless=True)
+    fig, axes = plt.subplots(1, 2, figsize=(args.tile * 2, args.tile),
+                             subplot_kw={"projection": "polar"}, squeeze=False)
+    fig.patch.set_facecolor("black")
+
+    started = time.time()
+    for ax, settings, title in ((axes[0][0], before, f"run {base['id']}, unchanged"),
+                                (axes[0][1], after, label)):
+        ax.set_theta_zero_location("S")
+        ax.set_facecolor("black")
+        ax.axis("off")
+        print(f"  drawing {title} ...", end="", flush=True)
+        draw(ax, settings)
+        print(f" {time.time() - started:.0f}s")
+        ax.set_title(title, color="white", fontsize=9, pad=6)
+
+    run = notebook.record(after, parent=base["id"])
+    path = notebook.image_path(run["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=args.dpi, facecolor="black", bbox_inches="tight")
+    print(f"recorded as run {styled(str(run['id']), BOLD)}, from run {base['id']}")
+    deliver(path, args.view)
+    return 0
+
+
+def cmd_note(args):
+    """Keep an observation with a run."""
+    run = notebook.annotate(args.run, args.text)
+    if run is None:
+        print("no such run. `luminet log` lists them.", file=sys.stderr)
+        return 2
+    print(f"noted on run {run['id']}: {run['note']}")
+    return 0
+
+
 # ----------------------------------------------------------------------- menu
 
 def ask(prompt, default, cast=str, choices=None):
@@ -338,8 +467,10 @@ def ask_view(args, default_output):
         args.view = ask("view", "kitty", str, ["kitty", "window", "file"])
     else:
         args.view = ask("view", "window", str, ["window", "file"])
-    if args.view != "window":
+    if args.view != "window" and default_output is not None:
         args.output = ask("write to", default_output, str)
+    else:
+        args.output = None
     return args
 
 
@@ -354,7 +485,10 @@ def menu():
         ("2", "sweep", "a grid of variations as one contact sheet"),
         ("3", "gallery", "preset tour of the inclination range"),
         ("4", "photons", "sample photons off the accretion disk"),
-        ("5", "help", "the full list of flags"),
+        ("5", "explain", "what each control is and what it changes"),
+        ("6", "log", "what you have rendered, and notes you kept"),
+        ("7", "vary", "repeat a run with one change, beside the original"),
+        ("8", "help", "the full list of flags"),
         ("q", "quit", ""),
     ]
 
@@ -404,7 +538,35 @@ def menu():
             args.ghost = ask("which image", "direct", str, ["direct", "ghost"]) == "ghost"
             print()
             cmd_photons(args)
-        elif choice in ("5", "help", "h", "?"):
+        elif choice in ("5", "explain"):
+            which = ask("which control, blank for all", "", str)
+            print()
+            cmd_explain(argparse.Namespace(control=which or None))
+        elif choice in ("6", "log"):
+            print()
+            cmd_log(argparse.Namespace(limit=30))
+        elif choice in ("7", "vary"):
+            latest = notebook.latest()
+            if latest is None:
+                print("  nothing recorded yet: render something first.")
+                continue
+            which = ask("which run", latest["id"], int)
+            base = notebook.get(which)
+            if base is None:
+                print(f"  no run {which}")
+                continue
+            print(f"  run {which}: {notebook.describe(base)}")
+            name = ask("which control to change", "incl", str, list(notebook.RECORDED))
+            print(f"    {guide.SHORT.get(name, '')}")
+            value = ask(f"new {name}", base["settings"].get(name), str)
+            v = argparse.Namespace(run=which, tile=3.5, dpi=110)
+            for k in notebook.RECORDED:
+                setattr(v, k, None)
+            setattr(v, name, value)
+            ask_view(v, None)
+            print()
+            cmd_vary(v)
+        elif choice in ("8", "help", "h", "?"):
             build_parser().print_help()
         else:
             print(f"  no such option: {choice}")
@@ -445,7 +607,8 @@ def add_view(p, default_output, allow_window):
     choices = ["kitty", "file"] + (["window"] if allow_window else [])
     p.add_argument("--view", default="kitty" if in_kitty() else "file", choices=choices,
                    help="kitty draws inline in the terminal; window opens a plot window")
-    p.add_argument("-o", "--output", default=default_output, help="where to write the image")
+    p.add_argument("-o", "--output", default=None if default_output is None else default_output,
+                   help="also write the image here; it always goes to the notebook")
     p.add_argument("--dpi", type=int, default=110, help="resolution of the written image")
 
 
@@ -459,7 +622,7 @@ def build_parser():
 
     p = sub.add_parser("render", help="render a single black hole")
     add_common(p, sweeping=False)
-    add_view(p, "luminet.png", allow_window=True)
+    add_view(p, None, allow_window=True)
     p.set_defaults(func=cmd_render)
 
     p = sub.add_parser("sweep", help="render a grid of variations as one contact sheet")
@@ -482,6 +645,33 @@ def build_parser():
     p.add_argument("--seed", type=int, default=None, help="seed, for reproducible sampling")
     p.add_argument("--ghost", action="store_true", help="show the ghost image instead")
     p.set_defaults(func=cmd_photons)
+
+    p = sub.add_parser("explain", help="what each control is and what it changes")
+    p.add_argument("control", nargs="?", help="one control, or leave blank for all of them")
+    p.set_defaults(func=cmd_explain)
+
+    p = sub.add_parser("log", help="what you have rendered so far")
+    p.add_argument("--limit", type=int, default=30, help="how many to show")
+    p.set_defaults(func=cmd_log)
+
+    p = sub.add_parser("show", help="draw an earlier run again")
+    p.add_argument("run", nargs="?", type=int, help="run number; the latest if omitted")
+    add_view(p, None, allow_window=False)
+    p.set_defaults(func=cmd_show)
+
+    p = sub.add_parser("vary", help="repeat a run with one thing changed, beside the original")
+    p.add_argument("run", nargs="?", type=int, help="run number; the latest if omitted")
+    for name in notebook.RECORDED:
+        p.add_argument(f"--{name.replace('_', '-')}", default=None,
+                       help=f"change {name}; see `luminet explain {name}`")
+    add_view(p, None, allow_window=False)
+    p.add_argument("--tile", type=float, default=3.5, help="size of each panel in inches")
+    p.set_defaults(func=cmd_vary)
+
+    p = sub.add_parser("note", help="keep an observation with a run")
+    p.add_argument("run", type=int)
+    p.add_argument("text")
+    p.set_defaults(func=cmd_note)
 
     sub.add_parser("menu", help="the interactive menu")
     return parser
