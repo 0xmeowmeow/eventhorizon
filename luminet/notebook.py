@@ -11,6 +11,7 @@ why the record, and not the PNG, is the thing worth keeping.
 
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -43,19 +44,44 @@ def cast(name, value):
         return value
 
 
+class NotebookUnreadable(Exception):
+    """The record exists but could not be read, so it must not be written over."""
+
+
 def load():
-    """Every run recorded so far, oldest first."""
+    """Every run recorded so far, oldest first.
+
+    A record that cannot be parsed is an error, not an empty notebook. Returning
+    [] here would let the next save write a fresh list over the top and destroy
+    the history, so the file is moved aside and named instead.
+    """
     if not RUNS_FILE.exists():
         return []
     try:
-        return json.loads(RUNS_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
-        return []
+        runs = json.loads(RUNS_FILE.read_text())
+    except json.JSONDecodeError as e:
+        kept = RUNS_FILE.with_suffix(f".unreadable-{int(time.time())}.json")
+        RUNS_FILE.rename(kept)
+        raise NotebookUnreadable(
+            f"{RUNS_FILE} could not be read ({e}). It has been kept as {kept} "
+            f"rather than written over; a new notebook starts from here."
+        ) from e
+    if not isinstance(runs, list):
+        raise NotebookUnreadable(f"{RUNS_FILE} does not contain a list of runs.")
+    return runs
 
 
 def save(runs):
+    """Write the record whole, or not at all.
+
+    Writing in place means an interrupted write leaves a half-file that the next
+    load cannot parse. Writing beside it and renaming makes the replacement
+    atomic, so the record on disk is always one complete version or the other.
+    """
     NOTEBOOK_DIR.mkdir(parents=True, exist_ok=True)
-    RUNS_FILE.write_text(json.dumps(runs, indent=2) + "\n")
+    tmp = RUNS_FILE.with_suffix(".writing.json")
+    tmp.write_text(json.dumps(runs, indent=2) + "\n")
+    os.replace(tmp, RUNS_FILE)
 
 
 def image_path(run_id):

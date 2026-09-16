@@ -884,6 +884,9 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("\ninterrupted")
         return 130
+    except notebook.NotebookUnreadable as e:
+        print(f"notebook: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
