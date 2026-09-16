@@ -106,6 +106,24 @@ luminet note 4 'ghost image separates here'
 luminet show 4                  # redraw an earlier run and its lineage
 ```
 
+### Drawing in the terminal
+
+```shell
+luminet term                      # flux in the brightness, redshift in the hue
+luminet term --channel order      # direct light vs light that went round the back
+luminet term --encoding sextant   # 2x3 per cell: more detail, two colours
+```
+
+Not ASCII. A cell in kitty and Ghostty is 10x22 px, so one sample per cell is
+twice as tall as it is wide. A half-block with independent foreground and
+background colours splits it into two 10x11 subpixels, which is both square
+enough and fully coloured. Sextants subdivide 2x3 instead and trade colour for
+detail, which suits line art.
+
+What gets drawn is the field data, not a photograph of the render: flux,
+redshift, source radius and image order are kept per point, so `--channel`
+chooses what to show without recomputing anything.
+
 ### Looping animations
 
 ```shell

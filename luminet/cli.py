@@ -10,6 +10,7 @@ import itertools
 import json
 import os
 import shutil
+import shutil
 import subprocess
 import sys
 import time
@@ -501,6 +502,57 @@ def cmd_animate(args):
     return 0
 
 
+def _terminal_grid(width_cells, height_cells, encoding):
+    """How many samples fit, given how each glyph subdivides its cell."""
+    if encoding == "sextant":
+        return width_cells * 2, height_cells * 3
+    return width_cells, height_cells * 2          # half-block
+
+
+def cmd_term(args):
+    """Draw straight into the terminal, using sub-cell glyphs rather than ASCII."""
+    import numpy as np
+
+    from luminet import cells, fields
+
+    size = shutil.get_terminal_size((96, 30))
+    width_cells = args.width or max(20, size.columns - 2)
+    height_cells = args.height or max(10, size.lines - 6)
+    width, height = _terminal_grid(width_cells, height_cells, args.encoding)
+
+    settings = {**DEFAULTS, "radii": "", "ghost_radii": ""}
+    run = notebook.get(args.run) if args.run else notebook.latest()
+    if run:
+        settings.update(run["settings"])
+    for name in ("incl", "mass", "acc", "outer_edge"):
+        if getattr(args, name, None) is not None:
+            settings[name] = getattr(args, name)
+
+    print(f"sampling the observer plane ...", end="", flush=True)
+    started = time.time()
+    orders = fields.compute(settings, n_radii=args.radii_samples, n_angles=args.angle_samples)
+    grid = fields.rasterise(orders, width, height)
+    print(f" {time.time() - started:.0f}s   "
+          f"{width}x{height} samples in {width_cells}x{height_cells} cells "
+          f"({args.encoding})")
+
+    if args.encoding == "sextant":
+        # Two colours per cell, so the field has to become a yes-or-no: either
+        # which image order this is, or whether it is bright enough to light.
+        if args.channel == "order":
+            lit = np.nan_to_num(grid["order"], nan=-1.0) > 0.5
+        else:
+            lit = np.nan_to_num(fields.normalise(grid, "flux")) > args.threshold
+        print(cells.sextant(lit))
+    else:
+        print(cells.half_block(cells.colourise(grid, args.channel)))
+
+    filled = int(grid["mask"].sum())
+    print(f"{filled} of {width * height} samples carry light "
+          f"({100 * filled / (width * height):.0f}%)")
+    return 0
+
+
 # ----------------------------------------------------------------------- menu
 
 def ask(prompt, default, cast=str, choices=None):
@@ -782,6 +834,26 @@ def build_parser():
     p.add_argument("-o", "--output", default="loop.gif", help=".gif, .mp4 or .webp")
     p.add_argument("--view", default="kitty" if in_kitty() else "file", choices=["kitty", "file"])
     p.set_defaults(func=cmd_animate)
+
+    p = sub.add_parser("term", help="draw in the terminal with sub-cell glyphs")
+    p.add_argument("--channel", default="both",
+                   choices=["both", "flux", "redshift", "radius", "order"],
+                   help="what to show. 'both' puts flux in the brightness and redshift in the hue")
+    p.add_argument("--encoding", default="half", choices=["half", "sextant"],
+                   help="half-block gives every subpixel its own colour; "
+                        "sextant trades colour for detail")
+    p.add_argument("--run", type=int, help="settings from a recorded run")
+    p.add_argument("--incl", type=float)
+    p.add_argument("--mass", type=float)
+    p.add_argument("--acc", type=float)
+    p.add_argument("--outer-edge", type=float)
+    p.add_argument("--width", type=int, help="cells across; defaults to the window")
+    p.add_argument("--height", type=int, help="cells down; defaults to the window")
+    p.add_argument("--radii-samples", type=int, default=140)
+    p.add_argument("--angle-samples", type=int, default=240)
+    p.add_argument("--threshold", type=float, default=0.06,
+                   help="sextant only: how bright a sample must be to light a subpixel")
+    p.set_defaults(func=cmd_term)
 
     sub.add_parser("tui", help="the interactive instrument: parameters and a live preview")
     sub.add_parser("menu", help="the prompt-based menu")
