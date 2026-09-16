@@ -15,6 +15,11 @@ from luminet.isoredshift import Isoredshift
 from luminet.photon import Photon, sample_photon
 
 
+DEFAULT_REDSHIFTS = [-0.2, -0.15, -0.1, -0.05, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]
+"""list[float]: Redshift values drawn when none are given. Spans the range a
+moderately inclined disk actually produces, finely enough near :math:`z=0` to
+show where the blue- and redshifted halves meet."""
+
 class BlackHole:
     """Black hole class for calculating and visualizing a Swarzschild black hole.
     """
@@ -182,11 +187,14 @@ class BlackHole:
         of redshift values along these isoradials.
 
         Args:
-            redshifts (List[float]): list of redshift values
+            redshifts (List[float]): list of redshift values. Defaults to
+                :py:data:`None`, which uses :py:data:`DEFAULT_REDSHIFTS`.
 
         Returns:
             List[:class:`~luminet.isoredshift.Isoredshift`]: list of calculated isoredshifts
         """
+        if redshifts is None:
+            redshifts = DEFAULT_REDSHIFTS
         # Don't recalculate isoredshifts that have already been calculated
         redshifts = [z for z in redshifts if z not in [irz.redshift for irz in self.isoredshifts]]
 
@@ -345,7 +353,8 @@ class BlackHole:
         """Plot isoredshifts for a list of redshift values
 
         Args:
-            redshifts (List[float]): list of redshift values
+            redshifts (List[float]): list of redshift values. Defaults to
+                :py:data:`None`, which uses :py:data:`DEFAULT_REDSHIFTS`.
             kwargs (optional): additional keyword arguments for the :meth:`luminet.isoredshift.Isoredshift.plot` method.
             order (int): The order of the image to plot siofluxlines for. Default is :math:`0`.
             ax (:class:`~matplotlib.axes.Axes`, optional): Axes object to plot on.
