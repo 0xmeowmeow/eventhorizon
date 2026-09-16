@@ -6,3 +6,5 @@
 **__pycache__**
 docs/build**
 docs/source/autoapi**
+# local virtualenv
+.venv
