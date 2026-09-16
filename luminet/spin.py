@@ -165,8 +165,8 @@ def _splat(grid, rows, cols, values, spread):
 
 
 def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
-          hotspots=None, hot_gain=55.0, hot_spread=1.3):
-    """One frame: accumulate parcel light into a grid.
+          hotspots=None, hot_gain=10.0, hot_spread=1.3, gas_spread=1.4):
+    """One frame: the surface brightness seen in each direction.
 
     `hotspots` is a second, much smaller parcel set drawn bright and spread over
     a few cells. Smooth gas cannot show rotation: spread evenly it looks the
@@ -176,66 +176,87 @@ def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
     makes the motion legible. Real disks do flare in spots, but their placement
     here is arbitrary - a marker on the gas, not a prediction of where gas is
     bright.
+
+    Gas is averaged within a cell rather than summed. Parcels are a sampling of
+    a continuous disk, so summing them measures how many samples happened to
+    land in a cell, which is projection density and not brightness. That is not
+    a small error: the near side of the disk compresses an enormous amount of
+    disk area into the few cells in front of the hole, so summing fills the
+    shadow with light and drowns the Doppler beaming. Hotspots stay additive,
+    since they are meant to be an excess on top of the gas.
     """
     radii, angles = mapping["radii"], mapping["angles"]
     bh = mapping["bh"]
 
-    flux_grid = np.zeros((height, width))
-    z_grid = np.zeros((height, width))
-    weight = np.zeros((height, width))
+    gas = np.zeros((height, width))
+    gas_n = np.zeros((height, width))
+    hot = np.zeros((height, width))
+    z_sum = np.zeros((height, width))
+    z_weight = np.zeros((height, width))
 
-    sets = [(parcels, 1.0, 0.0)]
+    sets = [(parcels, 1.0, 0.0, False)]
     if hotspots is not None:
-        sets.append((hotspots, hot_gain, hot_spread))
+        sets.append((hotspots, hot_gain, hot_spread, True))
 
-    for group, gain, spread in sets:
-      ring, r, angle = group.at(phase, radii, turns)
-      for order in orders:
-        if order not in mapping["tables"]:
-            continue
-        b_table, z_table = mapping["tables"][order]
+    for group, gain, spread, is_hot in sets:
+        ring, r, angle = group.at(phase, radii, turns)
 
-        # Look the parcel up in the map: nearest ring, interpolated in angle.
-        col = angle / (2 * np.pi) * (len(angles) - 1)
-        lo = np.floor(col).astype(int) % len(angles)
-        hi = (lo + 1) % len(angles)
-        t = col - np.floor(col)
+        for order in orders:
+            if order not in mapping["tables"]:
+                continue
+            b_table, z_table = mapping["tables"][order]
 
-        b = (1 - t) * b_table[ring, lo] + t * b_table[ring, hi]
-        z = (1 - t) * z_table[ring, lo] + t * z_table[ring, hi]
-        good = np.isfinite(b) & np.isfinite(z)
-        if not good.any():
-            continue
+            # Look the parcel up in the map: nearest ring, interpolated in angle.
+            col = angle / (2 * np.pi) * (len(angles) - 1)
+            lo = np.floor(col).astype(int) % len(angles)
+            hi = (lo + 1) % len(angles)
+            t = col - np.floor(col)
 
-        flux = bhmath.calc_flux_observed(r[good], bh.acc, bh.mass, z[good]) * gain
-        weights = group.brightness
-        if np.ndim(weights):
-            flux = flux * weights[good]
-        # Ghost light has already been round the back and is much the fainter
-        # of the two; the map does not carry that, so weight it here.
-        if order == 1:
-            flux = flux * 0.45
+            b = (1 - t) * b_table[ring, lo] + t * b_table[ring, hi]
+            z = (1 - t) * z_table[ring, lo] + t * z_table[ring, hi]
+            good = np.isfinite(b) & np.isfinite(z)
+            if not good.any():
+                continue
 
-        x = b[good] * np.sin(angle[good])
-        y = -b[good] * np.cos(angle[good])
+            flux = bhmath.calc_flux_observed(r[good], bh.acc, bh.mass, z[good]) * gain
+            weights = group.brightness
+            if np.ndim(weights):
+                flux = flux * weights[good]
+            # Ghost light has already been round the back and is much the
+            # fainter of the two; the map does not carry that, so weight it here.
+            if order == 1:
+                flux = flux * 0.45
 
-        col_i = ((x / extent + 1) / 2 * (width - 1)).astype(int)
-        row_i = ((-y / extent + 1) / 2 * (height - 1)).astype(int)
-        inside = (col_i >= 0) & (col_i < width) & (row_i >= 0) & (row_i < height)
-        inside &= np.isfinite(flux)
-        if not inside.any():
-            continue
+            x = b[good] * np.sin(angle[good])
+            y = -b[good] * np.cos(angle[good])
 
-        _splat(flux_grid, row_i[inside], col_i[inside], flux[inside], spread)
-        _splat(z_grid, row_i[inside], col_i[inside], z[inside] * flux[inside], spread)
-        _splat(weight, row_i[inside], col_i[inside], flux[inside], spread)
+            col_i = ((x / extent + 1) / 2 * (width - 1)).astype(int)
+            row_i = ((-y / extent + 1) / 2 * (height - 1)).astype(int)
+            inside = (col_i >= 0) & (col_i < width) & (row_i >= 0) & (row_i < height)
+            inside &= np.isfinite(flux)
+            if not inside.any():
+                continue
 
-    lit = weight > 0
+            rows, columns, values = row_i[inside], col_i[inside], flux[inside]
+            if is_hot:
+                _splat(hot, rows, columns, values, spread)
+            else:
+                # Spread the gas over a cell or so, and spread what it is
+                # divided by in exactly the same way, so this stays a weighted
+                # mean. Without it, any cell that happened to catch no parcel
+                # reads as a hole in the disk.
+                _splat(gas, rows, columns, values, gas_spread)
+                _splat(gas_n, rows, columns, np.ones_like(values), gas_spread)
+            np.add.at(z_sum, (rows, columns), z[good][inside] * values)
+            np.add.at(z_weight, (rows, columns), values)
+
     with np.errstate(invalid="ignore", divide="ignore"):
-        z_mean = np.where(lit, z_grid / np.where(lit, weight, 1), np.nan)
+        brightness = np.where(gas_n > 0, gas / np.where(gas_n > 0, gas_n, 1), 0.0) + hot
+        z_mean = np.where(z_weight > 0, z_sum / np.where(z_weight > 0, z_weight, 1), np.nan)
 
+    lit = brightness > 0
     return {
-        "flux": np.where(lit, flux_grid, np.nan),
+        "flux": np.where(lit, brightness, np.nan),
         "z": z_mean,
         "radius": np.full((height, width), np.nan),
         "order": np.zeros((height, width)),

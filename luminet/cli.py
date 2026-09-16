@@ -613,7 +613,8 @@ def cmd_spin(args):
     for i in range(args.frames):
         grid = spin.frame(mapping, parcels, i / args.frames, render_w, render_h,
                           extent, turns, orders, hotspots=hotspots,
-                          hot_gain=args.hot_gain, hot_spread=args.hot_spread * ss)
+                          hot_gain=args.hot_gain, hot_spread=args.hot_spread * ss,
+                          gas_spread=args.gas_spread * ss)
         full.append(cells.colourise(grid, args.channel, gamma=args.gamma))
     images = [cells.downsample(img, ss) for img in full]
     print(f" {time.time() - started:.0f}s")
@@ -988,8 +989,10 @@ def build_parser():
     p.add_argument("--hotspots", type=int, default=14,
                    help="bright spots carried round with the gas, so the rotation reads. "
                         "A marker on the gas, not a prediction. 0 for none")
-    p.add_argument("--hot-gain", type=float, default=55.0, help="how bright those spots are")
+    p.add_argument("--hot-gain", type=float, default=10.0, help="how bright those spots are")
     p.add_argument("--hot-spread", type=float, default=1.3, help="how many cells each covers")
+    p.add_argument("--gas-spread", type=float, default=1.4,
+                   help="how far each gas parcel is spread, to close gaps in the disk")
     p.add_argument("--no-ghost", action="store_true", help="hide the second image")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--once", action="store_true", help="play one loop and stop")
