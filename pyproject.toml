@@ -17,6 +17,9 @@ classifiers = [
 readme = "README.md"
 license = { text = "MIT" }
 
+[project.optional-dependencies]
+tui = ["textual>=1.0", "textual-image>=0.6"]
+
 [project.scripts]
 luminet = "luminet.cli:main"
 

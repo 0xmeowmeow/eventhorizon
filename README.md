@@ -69,7 +69,18 @@ Note that sampling is biased towards the center of the black hole, since this is
 
 ## 🔭 Exploring it from the terminal
 
-`luminet` opens a menu; every option is also a subcommand.
+```shell
+luminet tui
+```
+
+An instrument rather than a menu: every control is on screen with the values it
+accepts, so there is nothing to look up. Arrow up and down to pick a control,
+left and right to change it, `r` to render, `?` for what that control does.
+Press `space` to pin a render as the baseline; it stays in the left pane while
+you change things on the right, and the footer names exactly what differs.
+
+`luminet` on its own opens a prompt-based menu instead; every option is also a
+subcommand.
 
 ```shell
 luminet explain            # what every control is and what it changes

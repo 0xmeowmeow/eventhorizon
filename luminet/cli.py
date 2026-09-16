@@ -7,6 +7,7 @@ directly: `luminet render`, `luminet sweep`, `luminet gallery`, `luminet photons
 
 import argparse
 import itertools
+import json
 import os
 import shutil
 import subprocess
@@ -271,9 +272,20 @@ def cmd_sweep(args):
             ax.set_title(label, color="white", fontsize=9, pad=6)
 
     fig.tight_layout()
-    fig.savefig(args.output, dpi=args.dpi, facecolor="black", bbox_inches="tight")
+
+    base = {name: vals[0] for name, vals in values.items()}
+    swept = "; ".join(f"{n} = {', '.join(str(v) for v in values[n])}"
+                      for n in (col_name, row_name) if n)
+    run = notebook.record(base, note=f"sweep of {swept}" if swept else "sweep")
+    path = notebook.image_path(run["id"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=args.dpi, facecolor="black", bbox_inches="tight")
+    if args.output:
+        fig.savefig(args.output, dpi=args.dpi, facecolor="black", bbox_inches="tight")
     print(f"{total} renders in {time.time() - started:.0f}s")
-    deliver(args.output, args.view)
+    print(f"recorded as run {styled(str(run['id']), BOLD)}"
+          f"   (luminet vary {run['id']} --incl ... to build on it)")
+    deliver(args.output or path, args.view)
     return 0
 
 
@@ -414,6 +426,28 @@ def cmd_note(args):
     return 0
 
 
+def cmd_draw(args):
+    """Render one image from JSON settings. Used by the TUI, which renders out of process."""
+    settings = {**DEFAULTS, "radii": "", "ghost_radii": "", **json.loads(args.settings)}
+    plt = _pyplot(headless=True)
+    fig, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(5, 5))
+    ax.set_theta_zero_location("S")
+    fig.patch.set_facecolor("black")
+    ax.set_facecolor("black")
+    ax.axis("off")
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    draw(ax, settings)
+    fig.savefig(args.output, dpi=args.dpi, facecolor="black", bbox_inches="tight")
+    return 0
+
+
+def cmd_tui(args):
+    """Open the interactive instrument."""
+    from luminet import tui
+
+    return tui.run()
+
+
 # ----------------------------------------------------------------------- menu
 
 def ask(prompt, default, cast=str, choices=None):
@@ -481,6 +515,7 @@ def menu():
         return 2
 
     items = [
+        ("0", "explore", "the interactive instrument: parameters and a preview"),
         ("1", "render", "one black hole, in a window or a file"),
         ("2", "sweep", "a grid of variations as one contact sheet"),
         ("3", "gallery", "preset tour of the inclination range"),
@@ -514,7 +549,9 @@ def menu():
         args.radii, args.ghost_radii = "", ""
 
         print()
-        if choice in ("1", "render"):
+        if choice in ("0", "explore", "tui"):
+            cmd_tui(None)
+        elif choice in ("1", "render"):
             ask_common(args, sweeping=False)
             ask_view(args, "luminet.png")
             print()
@@ -627,12 +664,12 @@ def build_parser():
 
     p = sub.add_parser("sweep", help="render a grid of variations as one contact sheet")
     add_common(p, sweeping=True)
-    add_view(p, "sweep.png", allow_window=False)
+    add_view(p, None, allow_window=False)
     p.add_argument("--tile", type=float, default=3.0, help="size of each tile in inches")
     p.set_defaults(func=cmd_sweep)
 
     p = sub.add_parser("gallery", help="preset tour of the inclination range")
-    add_view(p, "gallery.png", allow_window=False)
+    add_view(p, None, allow_window=False)
     p.add_argument("--tile", type=float, default=3.0, help="size of each tile in inches")
     p.set_defaults(func=cmd_gallery)
 
@@ -673,7 +710,14 @@ def build_parser():
     p.add_argument("text")
     p.set_defaults(func=cmd_note)
 
-    sub.add_parser("menu", help="the interactive menu")
+    sub.add_parser("tui", help="the interactive instrument: parameters and a live preview")
+    sub.add_parser("menu", help="the prompt-based menu")
+
+    p = sub.add_parser("_draw")  # internal: used by the TUI to render out of process
+    p.add_argument("--settings", required=True)
+    p.add_argument("-o", "--output", required=True)
+    p.add_argument("--dpi", type=int, default=110)
+    p.set_defaults(func=cmd_draw)
     return parser
 
 
@@ -681,6 +725,8 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
 
+    if argv == ["tui"]:
+        return cmd_tui(None)
     if not argv or argv == ["menu"]:
         return menu()
 
