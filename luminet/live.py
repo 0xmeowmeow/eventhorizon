@@ -164,14 +164,22 @@ class Live:
         value = np.nan_to_num(fields.normalise(grid, "flux", gamma=self.o.gamma))
 
         if not ENCODINGS[self.encoding]["colour"]:
-            # One colour per cell, so tone has to come from how many dots are
-            # lit rather than from how bright each one is.
+            # One colour per cell, so the fine structure comes from which dots
+            # are lit and the palette is applied cell by cell on top.
             lit = cells.stipple(value, 1.0) & grid["mask"]
+            star_dots = None
             if self.stars_on:
-                lit = lit | (self.stars > self.o.star_cut) & ~grid["mask"]
+                star_dots = (self.stars > self.o.star_cut) & ~grid["mask"]
+                lit = lit | star_dots
+
+            # plot1979 is monochrome on purpose: the original was one ink.
+            colours = None
+            if self.encoding != "plot1979":
+                colours = self.cell_colours(value, grid["mask"], star_dots)
+
             if self.encoding == "sextant":
-                return cells.sextant(lit, self.ink())
-            return cells.braille(lit, self.ink())
+                return cells.sextant(lit, self.ink(), colours=colours)
+            return cells.braille(lit, self.ink(), colours=colours)
 
         if self.dither_on:
             value = cells.dither(value, 0.04)
@@ -195,6 +203,29 @@ class Live:
         if self.vignette_on:
             img = cells.vignette(img, 0.4)
         return cells.half_block(img)
+
+    def cell_colours(self, value, mask, star_dots):
+        """A palette colour for each cell, from the light that falls in it.
+
+        The dots already say how dense the light is, so the colour is lifted
+        off black: a dim cell with a dark colour would leave its few dots
+        invisible and throw away the structure the dots are there to show.
+        """
+        sub = ENCODINGS[self.encoding]
+        sy, sx, rows, cols = sub["y"], sub["x"], self.rows, self.cols
+        v = value[:rows * sy, :cols * sx].reshape(rows, sy, cols, sx)
+        mk = mask[:rows * sy, :cols * sx].reshape(rows, sy, cols, sx)
+        covered = mk.sum(axis=(1, 3))
+        mean = (v * mk).sum(axis=(1, 3)) / np.maximum(covered, 1)
+
+        tone = 0.35 + 0.65 * np.clip(mean, 0.0, 1.0) ** 0.6
+        stops = cells.palette(PALETTE_CYCLE[self.palette_at])
+        colours = cells._ramp(tone, stops).astype(np.uint8)
+
+        if star_dots is not None:
+            star = star_dots[:rows * sy, :cols * sx].reshape(rows, sy, cols, sx).any(axis=(1, 3))
+            colours[star & (covered == 0)] = (220, 228, 245)
+        return colours
 
     def ink(self):
         if self.encoding == "plot1979":

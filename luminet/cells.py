@@ -99,25 +99,44 @@ def half_block(rgb):
     return "\n".join(lines)
 
 
-def sextant(mask, foreground=(255, 255, 255), background=(0, 0, 0)):
-    """Render a two-tone (H, W) boolean mask at 2x3 per cell."""
+def _emit(codes, colours, foreground, background):
+    """Write rows of glyphs, each cell in its own foreground colour.
+
+    A cell carries one foreground colour whatever glyph is in it - but that is
+    one per cell, not one for the picture. Sending a single colour for the whole
+    frame is what made the dot encodings come out solid. Runs of identical
+    colour share one escape, so this costs little over the single-colour version.
+    """
+    bg = _rgb(*background, background=True)
+    lines = []
+    for r, row in enumerate(codes):
+        if colours is None:
+            lines.append(_rgb(*foreground) + bg + "".join(row) + RESET)
+            continue
+        packed = ((colours[r, :, 0].astype(np.uint32) << 16)
+                  | (colours[r, :, 1].astype(np.uint32) << 8)
+                  | colours[r, :, 2].astype(np.uint32))
+        starts = np.flatnonzero(np.r_[True, packed[1:] != packed[:-1]])
+        ends = np.r_[starts[1:], len(packed)]
+        out = [bg]
+        for a, b in zip(starts.tolist(), ends.tolist()):
+            c = int(packed[a])
+            out.append(f"\033[38;2;{c >> 16};{(c >> 8) & 255};{c & 255}m")
+            out.append("".join(row[a:b]))
+        lines.append("".join(out) + RESET)
+    return "\n".join(lines)
+
+
+def sextant(mask, foreground=(255, 255, 255), background=(0, 0, 0), colours=None):
+    """Render an (H, W) mask at 2x3 per cell, optionally coloured per cell."""
     mask = np.asarray(mask, dtype=bool)
     height = mask.shape[0] - mask.shape[0] % 3
     width = mask.shape[1] - mask.shape[1] % 2
-
-    head = _rgb(*foreground) + _rgb(*background, background=True)
-    lines = []
-    for row in range(0, height, 3):
-        out = [head]
-        for col in range(0, width, 2):
-            bits = 0
-            for dy in range(3):
-                for dx in range(2):
-                    if mask[row + dy, col + dx]:
-                        bits |= 1 << (dy * 2 + dx)
-            out.append(SEXTANTS[bits])
-        lines.append("".join(out) + RESET)
-    return "\n".join(lines)
+    block = mask[:height, :width].reshape(height // 3, 3, width // 2, 2)
+    weights = np.array([[1, 2], [4, 8], [16, 32]], dtype=np.uint8)
+    bits = (block * weights[None, :, None, :]).sum(axis=(1, 3))
+    codes = [[SEXTANTS[int(v)] for v in row] for row in bits]
+    return _emit(codes, colours, foreground, background)
 
 
 # Braille packs 2x4 dots into one cell: the finest grid the terminal offers
@@ -130,19 +149,15 @@ BRAILLE_BITS = np.array([[0x01, 0x08],
                          [0x40, 0x80]], dtype=np.uint8)
 
 
-def braille(mask, foreground=(235, 225, 205), background=(0, 0, 0)):
-    """Render a two-tone (H, W) mask at 2x4 dots per cell."""
+def braille(mask, foreground=(235, 225, 205), background=(0, 0, 0), colours=None):
+    """Render an (H, W) mask at 2x4 dots per cell, optionally coloured per cell."""
     mask = np.asarray(mask, dtype=bool)
     height = mask.shape[0] - mask.shape[0] % 4
     width = mask.shape[1] - mask.shape[1] % 2
     block = mask[:height, :width].reshape(height // 4, 4, width // 2, 2)
     bits = (block * BRAILLE_BITS[None, :, None, :]).sum(axis=(1, 3)).astype(np.uint16)
-
-    head = _rgb(*foreground) + _rgb(*background, background=True)
-    lines = []
-    for row in bits:
-        lines.append(head + "".join(chr(0x2800 + int(v)) for v in row) + RESET)
-    return "\n".join(lines)
+    codes = [[chr(0x2800 + int(v)) for v in row] for row in bits]
+    return _emit(codes, colours, foreground, background)
 
 
 def stipple(values, strength=1.0):
