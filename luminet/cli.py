@@ -546,7 +546,8 @@ def cmd_term(args):
             lit = np.nan_to_num(fields.normalise(grid, "flux")) > args.threshold
         print(cells.sextant(lit))
     else:
-        print(cells.half_block(cells.colourise(grid, args.channel)))
+        print(cells.half_block(cells.bloom(cells.colourise(
+            grid, args.channel, name=args.palette), args.bloom)))
 
     filled = int(grid["mask"].sum())
     print(f"{filled} of {width * height} samples carry light "
@@ -584,7 +585,8 @@ def _spin_live(args, mapping, parcels, hotspots, extent, orders,
                               extent, None, orders, hotspots=hotspots,
                               hot_gain=args.hot_gain, hot_spread=args.hot_spread * ss,
                               gas_spread=args.gas_spread * ss, rates=rates)
-            img = cells.downsample(cells.colourise(grid, args.channel, gamma=args.gamma), ss)
+            img = cells.downsample(cells.bloom(cells.colourise(grid, args.channel, gamma=args.gamma,
+                                             name=args.palette), args.bloom), ss)
             pane = cells.half_block(img)
 
             if not first:
@@ -725,6 +727,37 @@ def cmd_spin(args):
     finally:
         sys.stdout.write("\033[?25h\n")
         sys.stdout.flush()
+    return 0
+
+
+def cmd_palettes(args):
+    """Show every palette, on the same frame."""
+    from luminet import cells, spin
+
+    names = args.names or ["ember", "inferno", "magma", "phosphor", "amber",
+                           "ice", "gameboy", "bw"]
+    settings = {**DEFAULTS, "radii": "", "ghost_radii": ""}
+    if args.incl is not None:
+        settings["incl"] = args.incl
+
+    print("solving the map once ...", end="", flush=True)
+    mapping = spin.lensing_map(settings, n_rings=40, n_angles=160)
+    extent = spin.reach(mapping)
+    parcels = spin.Parcels(mapping["radii"], count=args.width * args.height * 2)
+    rates = spin.true_rates(mapping["radii"], float(settings["mass"]))
+    grid = spin.frame(mapping, parcels, 0.0, args.width, args.height * 2,
+                      extent, None, rates=rates)
+    print(" done. The map is shared, so each palette below costs under a millisecond.\n")
+
+    for name in names:
+        try:
+            img = cells.bloom(cells.colourise(grid, "flux", gamma=0.75, name=name), args.bloom)
+        except ValueError as e:
+            print(f"  {name}: {e}")
+            continue
+        print(f"  {styled(name, BOLD)}")
+        print(cells.half_block(img))
+        print()
     return 0
 
 
@@ -1014,6 +1047,11 @@ def build_parser():
     p.add_argument("--channel", default="flux",
                    choices=["flux", "both", "redshift", "radius", "order"],
                    help="what to show. 'both' puts flux in the brightness and redshift in the hue")
+    p.add_argument("--palette", default="ember",
+                   help="colour ramp: ember, phosphor, amber, ice, gameboy, mono, bw, "
+                        "redshift, or any matplotlib colormap such as inferno or magma")
+    p.add_argument("--bloom", type=float, default=0.0,
+                   help="let the bright parts spill into their surroundings, 0 to about 1.5")
     p.add_argument("--encoding", default="half", choices=["half", "sextant"],
                    help="half-block gives every subpixel its own colour; "
                         "sextant trades colour for detail")
@@ -1048,6 +1086,11 @@ def build_parser():
                         "visible. The patches are a tracer the model does not predict; the "
                         "way they shear into arms is real differential rotation. 0 for none")
     p.add_argument("--depth", type=float, default=0.9, help="how pronounced the pattern is")
+    p.add_argument("--palette", default="ember",
+                   help="colour ramp: ember, phosphor, amber, ice, gameboy, mono, bw, "
+                        "redshift, or any matplotlib colormap such as inferno or magma")
+    p.add_argument("--bloom", type=float, default=0.0,
+                   help="let the bright parts spill into their surroundings, 0 to about 1.5")
     p.add_argument("--hotspots", type=int, default=0,
                    help="discrete bright spots carried round with the gas. Off by default, "
                         "since the sheared pattern now carries the motion on its own")
@@ -1080,6 +1123,14 @@ def build_parser():
     p.add_argument("--gamma", type=float, default=0.75,
                    help="below 1 lifts the faint disk, above 1 deepens the blacks")
     p.set_defaults(func=cmd_spin)
+
+    p = sub.add_parser("palettes", help="show the colour ramps on one frame")
+    p.add_argument("names", nargs="*", help="which to show; a default set if omitted")
+    p.add_argument("--incl", type=float)
+    p.add_argument("--width", type=int, default=72)
+    p.add_argument("--height", type=int, default=12)
+    p.add_argument("--bloom", type=float, default=0.0)
+    p.set_defaults(func=cmd_palettes)
 
     sub.add_parser("tui", help="the interactive instrument: parameters and a live preview")
     sub.add_parser("menu", help="the prompt-based menu")

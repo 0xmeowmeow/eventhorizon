@@ -145,11 +145,57 @@ def _ramp(t, stops):
 
 TINT = 0.55   # how far the redshift is allowed to colour the flux image
 
+# Colour is about 5% of a frame's cost, against a lensing map that is solved
+# once, so the palette is free to be anything. These are ramps from the shared
+# terminal aesthetics taxonomy; any of matplotlib's 182 colormaps works too,
+# by name.
+PALETTES = {
+    "ember": [(0, 0, 0), (70, 40, 20), (190, 120, 45), (255, 220, 150), (255, 255, 255)],
+    "phosphor": [(0, 0, 0), (0, 35, 12), (0, 150, 60), (130, 255, 175), (225, 255, 240)],
+    "amber": [(0, 0, 0), (40, 18, 0), (170, 85, 0), (255, 185, 55), (255, 240, 200)],
+    "ice": [(0, 0, 0), (8, 28, 60), (40, 110, 180), (150, 210, 245), (255, 255, 255)],
+    "gameboy": [(15, 56, 15), (48, 98, 48), (139, 172, 15), (155, 188, 15)],
+    "mono": [(0, 0, 0), (255, 255, 255)],
+    "bw": [(0, 0, 0), (0, 0, 0), (255, 255, 255), (255, 255, 255)],
+    "redshift": [(70, 130, 255), (170, 205, 255), (245, 245, 245), (255, 170, 140), (230, 60, 40)],
+}
+
+
+def palette(name):
+    """Colour stops by name: one of ours, or any matplotlib colormap."""
+    if not name:
+        return PALETTES["ember"]
+    if name in PALETTES:
+        return PALETTES[name]
+    import matplotlib
+
+    if name in matplotlib.colormaps:
+        sampled = matplotlib.colormaps[name](np.linspace(0, 1, 32))
+        return [tuple(int(v * 255) for v in row[:3]) for row in sampled]
+    known = ", ".join(sorted(PALETTES))
+    raise ValueError(f"Unknown palette {name!r}. Ours: {known}. "
+                     f"Any matplotlib colormap name also works, e.g. inferno.")
+
+
+def bloom(rgb, amount=0.6, radius=2.0):
+    """Let the bright parts spill into their surroundings.
+
+    Cheap, and it suits something whose whole subject is light: the lensed arc
+    reads as glare rather than as a hard-edged shape.
+    """
+    if amount <= 0:
+        return rgb
+    from scipy.ndimage import gaussian_filter
+
+    blurred = gaussian_filter(rgb.astype(np.float32), sigma=(radius, radius, 0))
+    return np.clip(rgb.astype(np.float32) + blurred * amount, 0, 255).astype(np.uint8)
+
+
 FLUX_STOPS = [(0, 0, 0), (70, 40, 20), (190, 120, 45), (255, 220, 150), (255, 255, 255)]
 REDSHIFT_STOPS = [(70, 130, 255), (170, 205, 255), (245, 245, 245), (255, 170, 140), (230, 60, 40)]
 
 
-def colourise(grid, channel="both", gamma=1.0):
+def colourise(grid, channel="both", gamma=1.0, name=None):
     """Turn a rasterised field into an (H, W, 3) image.
 
     'both' is the one worth looking at: brightness carries the flux, the thing a
@@ -158,12 +204,13 @@ def colourise(grid, channel="both", gamma=1.0):
     """
     from luminet import fields
 
+    stops = palette(name)
     shape = grid["flux"].shape
     out = np.zeros((*shape, 3))
 
     if channel == "flux":
         t = fields.normalise(grid, "flux", gamma=gamma)
-        out = _ramp(np.nan_to_num(t), FLUX_STOPS)
+        out = _ramp(np.nan_to_num(t), stops)
     elif channel == "redshift":
         t = fields.normalise(grid, "z")
         out = _ramp(np.nan_to_num(t, nan=0.5), REDSHIFT_STOPS)
@@ -179,7 +226,7 @@ def colourise(grid, channel="both", gamma=1.0):
         # flattened it into grey soup; the flux view beat it easily. Contrast is
         # what makes the picture read, so keep the flux ramp exactly as it is
         # and only tint it, which costs saturation rather than dynamic range.
-        base = _ramp(np.nan_to_num(fields.normalise(grid, "flux", gamma=gamma)), FLUX_STOPS)
+        base = _ramp(np.nan_to_num(fields.normalise(grid, "flux", gamma=gamma)), stops)
         tint = _ramp(np.nan_to_num(fields.normalise(grid, "z"), nan=0.5), REDSHIFT_STOPS)
         luminance = base.mean(axis=-1, keepdims=True)
         tint = tint / np.maximum(tint.max(axis=-1, keepdims=True), 1.0)
