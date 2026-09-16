@@ -177,6 +177,95 @@ def palette(name):
                      f"Any matplotlib colormap name also works, e.g. inferno.")
 
 
+def feather(rgb, mask, amount=1.0):
+    """Soften the silhouette, so the disk does not end in a staircase.
+
+    The disk's outer edge really is an edge - the material stops - but it should
+    land on a cell as a fraction of coverage, not as on or off. Sampled once per
+    cell it is all or nothing, and a curve crossing the grid at a shallow angle
+    turns into steps.
+
+    Blurring the coverage rather than the picture fixes the outline without
+    touching anything inside it: the interior stays saturated because the blurred
+    mask is pushed back above one there, and only the boundary keeps a partial
+    value to fade through.
+    """
+    if amount <= 0:
+        return rgb
+    from scipy.ndimage import gaussian_filter
+
+    coverage = gaussian_filter(mask.astype(np.float32), sigma=0.9 * amount)
+    # Lift the interior back to solid; only the rim is left part-covered.
+    alpha = np.clip(coverage * 1.9, 0.0, 1.0)
+    return (rgb.astype(np.float32) * alpha[..., None]).astype(np.uint8)
+
+
+def starfield(width, height, density=0.012, seed=11):
+    """A fixed field of background stars.
+
+    These are decoration, not physics: real starlight this close to a black hole
+    is lensed into arcs and an Einstein ring, and none of that is modelled here.
+    """
+    rng = np.random.default_rng(seed)
+    field = np.zeros((height, width), dtype=np.float32)
+    count = max(1, int(width * height * density))
+    ys = rng.integers(0, height, count)
+    xs = rng.integers(0, width, count)
+    # Mostly faint, a few bright: an even spread reads as noise.
+    field[ys, xs] = rng.random(count) ** 2.5
+    return field
+
+
+def add_stars(rgb, field, mask, brightness=190.0, twinkle=None):
+    """Put the stars behind the disk."""
+    if field is None:
+        return rgb
+    lit = field * brightness
+    if twinkle is not None:
+        lit = lit * twinkle
+    behind = ~mask
+    out = rgb.astype(np.float32)
+    out[behind] += lit[behind][..., None]
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+BAYER8 = np.array([
+    [0, 32, 8, 40, 2, 34, 10, 42], [48, 16, 56, 24, 50, 18, 58, 26],
+    [12, 44, 4, 36, 14, 46, 6, 38], [60, 28, 52, 20, 62, 30, 54, 22],
+    [3, 35, 11, 43, 1, 33, 9, 41], [51, 19, 59, 27, 49, 17, 57, 25],
+    [15, 47, 7, 39, 13, 45, 5, 37], [63, 31, 55, 23, 61, 29, 53, 21],
+], dtype=np.float32) / 64.0 - 0.5
+
+
+def dither(values, strength=1.0):
+    """Ordered dither, to break up banding in a short ramp."""
+    if strength <= 0:
+        return values
+    h, w = values.shape
+    tile = np.tile(BAYER8, (h // 8 + 1, w // 8 + 1))[:h, :w]
+    return np.clip(values + tile * strength, 0.0, 1.0)
+
+
+def scanlines(rgb, strength=0.25):
+    """Darken alternate rows."""
+    if strength <= 0:
+        return rgb
+    out = rgb.astype(np.float32)
+    out[1::2] *= (1.0 - strength)
+    return out.astype(np.uint8)
+
+
+def vignette(rgb, strength=0.35):
+    """Darken towards the corners."""
+    if strength <= 0:
+        return rgb
+    h, w = rgb.shape[:2]
+    y = np.linspace(-1, 1, h)[:, None]
+    x = np.linspace(-1, 1, w)[None, :]
+    fade = 1.0 - strength * np.clip((x * x + y * y) / 2.0, 0, 1)
+    return (rgb.astype(np.float32) * fade[..., None]).astype(np.uint8)
+
+
 def bloom(rgb, amount=0.6, radius=2.0):
     """Let the bright parts spill into their surroundings.
 

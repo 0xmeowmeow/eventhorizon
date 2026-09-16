@@ -638,6 +638,11 @@ def cmd_spin(args):
             settings[name] = getattr(args, name)
 
     orders = (0,) if args.no_ghost else (0, 1)
+    if not (args.gif or args.save_frames or args.loop):
+        from luminet import live
+
+        return live.run(settings, args)
+
     print(f"solving the lensing map once ({args.rings} rings) ...", end="", flush=True)
     started = time.time()
     mapping = spin.lensing_map(settings, n_rings=args.rings, n_angles=args.angles,
@@ -667,8 +672,9 @@ def cmd_spin(args):
     print(f"recorded as run {recorded['id']}")
 
     if not want_file and not args.loop:
-        return _spin_live(args, mapping, parcels, hotspots, extent, orders,
-                          width, height, width_cells, height_cells, ss, settings)
+        from luminet import live
+
+        return live.run(settings, args)
 
     print(f"pre-rendering {args.frames} frames ...", end="", flush=True)
     started = time.time()
@@ -1101,6 +1107,17 @@ def build_parser():
     p.add_argument("--no-ghost", action="store_true", help="hide the second image")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--once", action="store_true", help="play one loop and stop")
+    p.add_argument("--no-stars", action="store_true", help="no background star field")
+    p.add_argument("--star-density", type=float, default=0.006)
+    p.add_argument("--star-brightness", type=float, default=230.0)
+    p.add_argument("--dither", action="store_true", help="ordered dither, against banding")
+    p.add_argument("--scanlines", action="store_true")
+    p.add_argument("--vignette", action="store_true")
+    p.add_argument("--density", type=float, default=1.0, help="how much gas per cell")
+    p.add_argument("--incl-step", type=float, default=0.05,
+                   help="how far [ and ] move the inclination")
+    p.add_argument("--edge-step", type=float, default=4.0, help="how far - and = move the disk")
+    p.add_argument("--mass-step", type=float, default=0.25, help="how far , and . move the mass")
     p.add_argument("--loop", action="store_true",
                    help="play a pre-rendered loop instead of computing frames live. "
                         "Writing a file always uses the loop, since a file has to repeat")

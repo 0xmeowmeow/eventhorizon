@@ -42,7 +42,8 @@ from luminet import black_hole_math as bhmath
 from luminet.black_hole import BlackHole
 
 
-def lensing_map(settings, n_rings=48, n_angles=180, orders=(0, 1)):
+def lensing_map(settings, n_rings=48, n_angles=180, orders=(0, 1),
+                on_progress=None, batches=10):
     """Solve where light from each (radius, angle) lands, once.
 
     Returns the radii and angles sampled, and per image order a pair of
@@ -57,10 +58,17 @@ def lensing_map(settings, n_rings=48, n_angles=180, orders=(0, 1)):
         radial_resolution=n_rings,
     )
     radii = np.linspace(bh.disk_inner_edge, bh.disk_outer_edge, n_rings)
-    bh.calc_isoradials(
-        direct_r=radii if 0 in orders else [],
-        ghost_r=radii if 1 in orders else [],
-    )
+    # Solve a few rings at a time. calc_isoradials accumulates and skips radii it
+    # already holds, so this costs almost nothing and lets a caller show real
+    # progress rather than a guess at how long is left.
+    chunks = np.array_split(radii, min(batches, n_rings)) if on_progress else [radii]
+    for done, chunk in enumerate(chunks, start=1):
+        bh.calc_isoradials(
+            direct_r=chunk if 0 in orders else [],
+            ghost_r=chunk if 1 in orders else [],
+        )
+        if on_progress:
+            on_progress(done, len(chunks))
 
     angles = np.linspace(0, 2 * np.pi, n_angles)
     tables = {}

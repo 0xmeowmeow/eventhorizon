@@ -114,6 +114,14 @@ luminet spin --incl 0.9 --hotspots 20
 luminet spin --gif out.gif      # a file, so a loop
 ```
 
+It reshapes itself when the window does, and takes keys while running: `p`
+palette, `b`/`B` bloom, `c`/`C` arms in the gas, `s`/`S` speed, `g` stars, `d`
+dither, `n` scanlines, `v` vignette, `a` antialiasing, `space` pause, `h` for
+the list. `[` `]` change the inclination, `-` `=` the disk size and `,` `.` the
+mass; those change the gravity rather than the picture, so they move a step at a
+time and show a bar while the map is solved again. The step sizes are
+`--incl-step`, `--edge-step` and `--mass-step`.
+
 On screen it runs live: each frame is computed as it is shown, so nothing has to
 return to where it started and the rings turn at their true Keplerian rates.
 Those periods are not whole multiples of one another, so no two rings ever come
