@@ -174,7 +174,12 @@ def calc_cos_gamma(alpha: float, incl: float) -> float:
     Returns:
         float: :math:`\cos(\gamma)`
     """
-    return np.cos(alpha) / np.sqrt(np.cos(alpha) ** 2 + 1 / (np.tan(incl) ** 2))
+    # A face-on observer (incl == 0) makes tan(incl) zero, so 1/tan(incl)**2
+    # overflows to infinity and cos(gamma) correctly goes to zero. That is a
+    # well defined limit rather than a failure, so let the division through
+    # quietly instead of warning on every call.
+    with np.errstate(divide="ignore"):
+        return np.cos(alpha) / np.sqrt(np.cos(alpha) ** 2 + 1 / (np.tan(incl) ** 2))
 
 
 def calc_sn(
