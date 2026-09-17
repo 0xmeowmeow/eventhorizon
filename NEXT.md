@@ -48,7 +48,15 @@ screen.
   public repo is public. An upstream PR would carry only the library fixes (RNG
   sampling, redshift defaults, color_by redshift, cos_gamma warning), on its
   own branch.
-- **Packaging** for Debian and Arch/Omarchy, after the name.
+- **Packaging.** v1.0.0 is tagged, with a GitHub release carrying the .deb.
+  Both packages were built from the tag in clean containers (245 tests each).
+  AUR push and the Debian ITP/mentors route need the user's accounts; the
+  steps are in packaging/README.md.
+- **meow-meow.io.** The page is written at meow-meow.io/eventhorizon/ with
+  recordings, not deployed and not committed there (25 MB of video). The tile
+  and updates entry wait in site/ until another session finishes editing
+  index.html and data/updates.json. A header generator for field.js is
+  possible from tools/web_export.py; also waiting.
 - The grey band just outside the shadow in pixel mode predates this work.
 - Ghostty glow shader, octants, smooth infall: parked.
 

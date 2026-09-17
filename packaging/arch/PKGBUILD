@@ -14,7 +14,7 @@ optdepends=('python-numba: compiled frames, about half the CPU'
             'ghostty: real pixels through the kitty graphics protocol'
             'python-textual: the luminet tui')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('51be7b72252764ccb140983b6d7e02e8b025f46ffa2e046c268c024d1febc168')
 
 build() {
   cd "$pkgname-$pkgver"

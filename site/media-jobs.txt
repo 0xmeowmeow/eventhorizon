@@ -1,0 +1,19 @@
+hero.mp4 --seconds 8 --width 960 --crf 32 --crop 0.62
+tilt.mp4 --seconds 11 --width 960 --crf 32 --crop 0.62 --keys 0.4:[,0.9:[,1.4:[,1.9:[,2.4:[,2.9:[,3.4:[,3.9:[,5.8:],6.3:],6.8:],7.3:],7.8:],8.3:],8.8:],9.3:]
+sweep.mp4 --preset inferno~sweep --seconds 12 --width 960 --crf 32 --crop 0.62
+probe.mp4 --seconds 14 --width 960 --crf 32 --crop 0.8 --keys 0.3:!
+transmission.mp4 --preset observatory --seconds 14 --width 960 --crf 32 --crop 0.8 --keys 0.3:@
+warp.mp4 --seconds 14 --width 960 --crf 32 --crop 0.62 --keys 1.0:$,8.0:$
+plate.webp --at 4 --width 1280
+flat.webp --flat --width 1280
+hud.webp --preset observatory --keys 0.2:@ --at 5 --width 1280
+braille.webp --braille --at 4 --width 960 --crop 0.62
+g-ember.webp --preset ember --at 3 --width 640 --crop 0.62
+g-isoradials.webp --preset cold~isoradials --at 3 --width 640 --crop 0.62
+g-edge.webp --preset ice~edge-on --at 3 --width 640 --crop 0.62
+g-magma.webp --preset magma~copper --at 3 --width 640 --crop 0.62
+g-bone.webp --preset bone,~wide --at 3 --width 640 --crop 0.62
+g-spectrum.webp --preset copper~spectrum --at 3 --width 640 --crop 0.62
+g-gameboy.webp --preset gameboy --at 3 --width 640 --crop 0.62
+g-redshift.webp --preset redshift~survey --at 3 --width 640 --crop 0.62
+g-whitehole.webp --keys 0.1:I --at 3 --width 640 --crop 0.62
