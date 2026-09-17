@@ -93,3 +93,31 @@ def test_dotfield_keeps_the_look_of_per_frame_dots(field_setup):
     a = uniform_filter(per_frame.astype(float), 6).ravel()
     b = uniform_filter(once.astype(float), 6).ravel()
     assert np.corrcoef(a, b)[0, 1] > 0.95
+
+
+def test_isolines_trace_the_rings_and_flow(disk):
+    """Isoradials land on the grid, and flowing dashes move with the gas."""
+    mapping, extent, rates = disk
+    width, height = 160, 96
+    ext_x, ext_y = spin.fit_extent(extent[0], width, height, reach_y=extent[1])
+    lines = spin.Isolines(mapping, width, height, ext_x, ext_y)
+    assert len(lines.lines) >= 6
+
+    solid = lines.frame(0.0, rates).copy()
+    assert solid.any()
+    early = lines.frame(0.0, rates, flowing=True).copy()
+    later = lines.frame(2.0, rates, flowing=True).copy()
+    # Dashes are a subset of the solid lines, and they move over time.
+    assert not (early & ~solid).any()
+    assert (early ^ later).any()
+
+
+def test_braille_backgrounds_are_sent_per_cell():
+    from luminet import cells
+
+    mask = np.ones((4, 4), dtype=bool)
+    fg = np.array([[[200, 0, 0], [200, 0, 0]]], dtype=np.uint8)
+    bg = np.array([[[0, 0, 50], [0, 0, 90]]], dtype=np.uint8)
+    out = cells.braille(mask, colours=fg, backgrounds=bg)
+    assert out.count("38;2;200;0;0") == 1
+    assert "48;2;0;0;50" in out and "48;2;0;0;90" in out

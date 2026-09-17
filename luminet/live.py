@@ -38,6 +38,8 @@ ENCODING_CYCLE = ["half", "sextant", "braille", "plot1979"]
 # Luminet inked his 1979 figure dot by dot on negative paper; this is that.
 INK = (238, 230, 210)
 PAPER = (14, 16, 13)     # the print is not quite black
+LINE = (150, 205, 235)   # isoradials drawn over the dots
+OVERLAYS = ["off", "lines", "flowing"]
 
 PALETTE_CYCLE = ["ink", "ember", "inferno", "magma", "amber", "phosphor", "ice",
                  "plasma", "cividis", "bone", "copper", "gameboy", "bw"]
@@ -60,6 +62,8 @@ HELP = [
     ("-  =", "disk size  (re-solves)"),
     (",  .", "mass  (re-solves)"),
     ("e  E", "encoding: half, sextant, braille, 1979 plot"),
+    ("i", "1979: isoradials off, drawn, flowing"),
+    ("o", "1979: hide or show the dots"),
     ("y", "cycle everything, hands off"),
     ("h  ?", "this list"),
 ]
@@ -80,6 +84,9 @@ class Live:
         self.vignette_on = opts.vignette
         self.feather_on = True
         self.encoding = opts.encoding
+        self.overlay = 0
+        self.dots_on = True
+        self.note = ("", 0.0)
         self.cycling = opts.cycle
         self.next_change = 0.0
         self.ss = max(1, opts.supersample)
@@ -135,6 +142,8 @@ class Live:
             self.field = spin.DotField(self.mapping, self.dust, self.w, self.h, self.extent,
                                        self.rates, orders, gamma=self.o.ink_gamma,
                                        projector=self.projector)
+            self.isolines = spin.Isolines(self.mapping, self.w, self.h,
+                                          self.field.ext_x, self.field.ext_y)
         self.resized = False
         # A new grid or a new map makes the old timings about something else,
         # and a re-solve pause would drag the rate down for a second.
@@ -259,25 +268,70 @@ class Live:
         """After Luminet's figure: scattered cream dots on near-black.
 
         Each dot is a parcel of gas, kept with probability proportional to how
-        bright it looks right now. The dots therefore are the disk: they orbit,
+        bright its cell is. The dots therefore are the disk: they orbit,
         brighten into view on the approaching side, and fill the whole frame
         thinly, because the disk solved for this mode runs far past its edges.
+
+        Isoradials can be drawn over them, and the look can take a glow, a
+        vignette and scanlines. Those work on colours per cell, since each
+        braille cell has one foreground and one background.
         """
-        lit = self.field.frame(self.clock, self.rates)
-        brightness = self.field.target
+        if self.dots_on:
+            lit = self.field.frame(self.clock, self.rates).copy()
+        else:
+            lit = np.zeros((self.h, self.w), dtype=bool)
+        line_cells = None
+        if self.overlay:
+            lines = self.isolines.frame(self.clock, self.rates,
+                                        flowing=OVERLAYS[self.overlay] == "flowing")
+            lit |= lines
+            line_cells = lines[:self.rows * 4, :self.cols * 2].reshape(
+                self.rows, 4, self.cols, 2).any(axis=(1, 3))
+
         name = PALETTE_CYCLE[self.palette_at]
-        if name == "ink":
+        effects = self.bloom > 0 or self.scanlines_on or self.vignette_on
+        if name == "ink" and line_cells is None and not effects:
             return cells.braille(lit, INK, PAPER)
 
-        # Any other palette colours each cell by the light falling in it. The
-        # spacing of the dots already carries the tone, so the colour is lifted
-        # well off black: a faint cell given a dark colour would lose the very
-        # dots that show it is faint.
-        sy, sx = 4, 2
-        b = brightness[:self.rows * sy, :self.cols * sx].reshape(self.rows, sy, self.cols, sx)
-        tone = 0.4 + 0.6 * np.clip(b.max(axis=(1, 3)), 0.0, 1.0) ** 0.5
-        colours = cells._ramp(tone, cells.palette(name)).astype(np.uint8)
-        return cells.braille(lit, INK, PAPER, colours=colours)
+        rows, cols = self.rows, self.cols
+        bright = self.field.target[:rows * 4, :cols * 2].reshape(rows, 4, cols, 2).max(axis=(1, 3))
+        if name == "ink":
+            colours = np.empty((rows, cols, 3), dtype=np.float32)
+            colours[:] = INK
+            glow_colour = np.array(INK, dtype=np.float32)
+        else:
+            # The spacing of the dots already carries the tone, so the colour is
+            # lifted well off black: a faint cell given a dark colour would lose
+            # the very dots that show it is faint.
+            stops = cells.palette(name)
+            tone = 0.4 + 0.6 * np.clip(bright, 0.0, 1.0) ** 0.5
+            colours = cells._ramp(tone, stops).astype(np.float32)
+            glow_colour = np.array(stops[len(stops) * 2 // 3], dtype=np.float32)
+        if line_cells is not None:
+            colours[line_cells] = LINE if self.dots_on else INK
+
+        backgrounds = np.empty((rows, cols, 3), dtype=np.float32)
+        backgrounds[:] = PAPER
+        if self.bloom > 0:
+            # Glow belongs in the gaps: a dot picture is mostly the space between
+            # dots, so light spilling from the bright lobe shows as the paper
+            # behind the dots warming, not as the dots themselves brightening.
+            from scipy.ndimage import gaussian_filter
+
+            spill = gaussian_filter(bright.astype(np.float32), sigma=(1.2, 2.4))
+            backgrounds += glow_colour[None, None, :] * (0.6 * self.bloom * spill)[..., None]
+        if self.vignette_on:
+            y = np.linspace(-1, 1, rows)[:, None]
+            x = np.linspace(-1, 1, cols)[None, :]
+            fade = (1.0 - 0.45 * np.clip((x * x + y * y) / 2.0, 0, 1))[..., None]
+            colours *= fade
+            backgrounds *= fade
+        if self.scanlines_on:
+            colours[1::2] *= 0.72
+            backgrounds[1::2] *= 0.72
+        return cells.braille(lit, INK, PAPER,
+                             colours=np.clip(colours, 0, 255).astype(np.uint8),
+                             backgrounds=np.clip(backgrounds, 0, 255).astype(np.uint8))
 
     def cell_colours(self, value, mask, star_dots):
         """A palette colour for each cell, from the light that falls in it.
@@ -317,6 +371,13 @@ class Live:
             bits.append("cycling")
         if self.encoding == "plot1979":
             bits.append("compiled" if self.projector is not None else "numpy")
+            if self.overlay:
+                bits.append(f"isoradials {OVERLAYS[self.overlay]}")
+            if not self.dots_on:
+                bits.append("dots hidden")
+        text, until = getattr(self, "note", ("", 0.0))
+        if text and time.monotonic() < until:
+            return text
         if self.paused:
             bits.append("PAUSED")
         shown = getattr(self, "shown", ())
@@ -335,6 +396,16 @@ class Live:
 
         if key in ("q", "\x1b", "\x03"):
             return False
+        if self.encoding == "plot1979" and key in ("g", "d", "f", "a"):
+            what = {"g": "stars", "d": "dither", "f": "edge softening",
+                    "a": "antialiasing"}[key]
+            self.note = (f"{what} is for half, sextant and braille; plot1979 has none",
+                         time.monotonic() + 3.0)
+            return True
+        if self.encoding != "plot1979" and key in ("i", "o"):
+            self.note = ("isoradials and hiding dots are plot1979 only",
+                         time.monotonic() + 3.0)
+            return True
         elif key == " ":
             self.paused = not self.paused
         elif key in ("h", "?"):
@@ -375,6 +446,10 @@ class Live:
             if (self.encoding == "plot1979") != getattr(self, "solved_for", False):
                 self.solve("the 1979 disk" if self.encoding == "plot1979" else "the disk")
             self.resized = True
+        elif key == "i":
+            self.overlay = (self.overlay + 1) % len(OVERLAYS)
+        elif key == "o":
+            self.dots_on = not self.dots_on
         elif key == "y":
             self.cycling = not self.cycling
             self.next_change = 0.0

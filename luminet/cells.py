@@ -99,29 +99,44 @@ def half_block(rgb):
     return "\n".join(lines)
 
 
-def _emit(codes, colours, foreground, background):
+def _emit(codes, colours, foreground, background, backgrounds=None):
     """Write rows of glyphs, each cell in its own foreground colour.
 
     A cell carries one foreground colour whatever glyph is in it - but that is
     one per cell, not one for the picture. Sending a single colour for the whole
     frame is what made the dot encodings come out solid. Runs of identical
     colour share one escape, so this costs little over the single-colour version.
+
+    `backgrounds`, when given, colours the space behind each cell too. For dots
+    that is where a glow has to go: the gaps between dots are most of a cell,
+    and light spilling across a picture made of dots shows in the gaps.
     """
-    bg = _rgb(*background, background=True)
     lines = []
     for r, row in enumerate(codes):
-        if colours is None:
-            lines.append(_rgb(*foreground) + bg + "".join(row) + RESET)
+        if colours is None and backgrounds is None:
+            lines.append(_rgb(*foreground) + _rgb(*background, background=True)
+                         + "".join(row) + RESET)
             continue
-        packed = ((colours[r, :, 0].astype(np.uint32) << 16)
-                  | (colours[r, :, 1].astype(np.uint32) << 8)
-                  | colours[r, :, 2].astype(np.uint32))
-        starts = np.flatnonzero(np.r_[True, packed[1:] != packed[:-1]])
-        ends = np.r_[starts[1:], len(packed)]
-        out = [bg]
+        n = len(row)
+        fg = (colours[r].astype(np.uint32) if colours is not None
+              else np.tile(np.array(foreground, np.uint32), (n, 1)))
+        bgc = (backgrounds[r].astype(np.uint32) if backgrounds is not None
+               else np.tile(np.array(background, np.uint32), (n, 1)))
+        f_key = (fg[:, 0] << 16) | (fg[:, 1] << 8) | fg[:, 2]
+        b_key = (bgc[:, 0] << 16) | (bgc[:, 1] << 8) | bgc[:, 2]
+        change = np.r_[True, (f_key[1:] != f_key[:-1]) | (b_key[1:] != b_key[:-1])]
+        starts = np.flatnonzero(change)
+        ends = np.r_[starts[1:], n]
+        out = []
+        last_f = last_b = None
         for a, b in zip(starts.tolist(), ends.tolist()):
-            c = int(packed[a])
-            out.append(f"\033[38;2;{c >> 16};{(c >> 8) & 255};{c & 255}m")
+            fk, bk = int(f_key[a]), int(b_key[a])
+            if fk != last_f:
+                out.append(f"\033[38;2;{fk >> 16};{(fk >> 8) & 255};{fk & 255}m")
+                last_f = fk
+            if bk != last_b:
+                out.append(f"\033[48;2;{bk >> 16};{(bk >> 8) & 255};{bk & 255}m")
+                last_b = bk
             out.append("".join(row[a:b]))
         lines.append("".join(out) + RESET)
     return "\n".join(lines)
@@ -149,7 +164,8 @@ BRAILLE_BITS = np.array([[0x01, 0x08],
                          [0x40, 0x80]], dtype=np.uint8)
 
 
-def braille(mask, foreground=(235, 225, 205), background=(0, 0, 0), colours=None):
+def braille(mask, foreground=(235, 225, 205), background=(0, 0, 0), colours=None,
+            backgrounds=None):
     """Render an (H, W) mask at 2x4 dots per cell, optionally coloured per cell."""
     mask = np.asarray(mask, dtype=bool)
     height = mask.shape[0] - mask.shape[0] % 4
@@ -157,7 +173,7 @@ def braille(mask, foreground=(235, 225, 205), background=(0, 0, 0), colours=None
     block = mask[:height, :width].reshape(height // 4, 4, width // 2, 2)
     bits = (block * BRAILLE_BITS[None, :, None, :]).sum(axis=(1, 3)).astype(np.uint16)
     codes = [[chr(0x2800 + int(v)) for v in row] for row in bits]
-    return _emit(codes, colours, foreground, background)
+    return _emit(codes, colours, foreground, background, backgrounds)
 
 
 def stipple(values, strength=1.0):

@@ -617,6 +617,62 @@ class DotField:
         return self.lit.reshape(self.height, self.width)
 
 
+class Isolines:
+    """Isoradials traced on the dot grid, for drawing over the 1979 dots.
+
+    An isoradial is where light from one ring of the disk lands on the screen.
+    The lensing map already holds every ring's curve, so nothing is solved
+    again: the chosen rings are read out of it, sampled densely enough to leave
+    no gaps between dots, and kept as dot positions.
+
+    At a fixed inclination the curves themselves never change, so what can move
+    is along them. flowing=True draws each ring as dashes that travel at that
+    ring's own orbital rate, so the inner rings visibly run faster than the
+    outer ones - the same motion as the gas, carried by the lines.
+
+    A curve is broken wherever the map has no light, rather than joined across
+    the gap.
+    """
+
+    def __init__(self, mapping, width, height, ext_x, ext_y,
+                 direct=(6, 10, 15, 20), ghost=(6, 20, 50, 100), samples=2400):
+        radii, angles, tables = mapping["radii"], mapping["angles"], mapping["tables"]
+        na = len(angles)
+        dense = np.linspace(0.0, 2 * np.pi, samples, endpoint=False)
+        nearest = np.rint(dense / (2 * np.pi) * (na - 1)).astype(int) % na
+        self.width, self.height = width, height
+        self.lines = []
+        for order, chosen in ((0, direct), (1, ghost)):
+            if order not in tables:
+                continue
+            for radius in chosen:
+                ring = int(np.argmin(np.abs(radii - radius)))
+                b = tables[order][0][ring]
+                good = np.isfinite(b)
+                if good.sum() < 4:
+                    continue
+                b_dense = np.interp(dense, angles[good], b[good], period=2 * np.pi)
+                valid = good[nearest]
+                ci = ((b_dense * np.sin(dense) / ext_x + 1) / 2 * (width - 1)).astype(np.int64)
+                ri = ((b_dense * np.cos(dense) / ext_y + 1) / 2 * (height - 1)).astype(np.int64)
+                inside = valid & (ci >= 0) & (ci < width) & (ri >= 0) & (ri < height)
+                self.lines.append((ring, dense[inside], ri[inside] * width + ci[inside]))
+        self.mask = np.zeros(width * height, dtype=bool)
+
+    def frame(self, t, rates, flowing=False, dashes=14, duty=0.55):
+        """Which dots the lines light at time t."""
+        self.mask[:] = False
+        for ring, alpha, cells_at in self.lines:
+            if flowing:
+                # A dash pattern fixed to the gas: the pattern at angle alpha
+                # now is where the gas that was at alpha - rate * t has come to.
+                phase = ((alpha - rates[ring] * t) * dashes / (2 * np.pi)) % 1.0
+                self.mask[cells_at[phase < duty]] = True
+            else:
+                self.mask[cells_at] = True
+        return self.mask.reshape(self.height, self.width)
+
+
 def reach(mapping, orders=(0, 1), max_radius=None):
     """How far the image extends across and down, so every frame shares a scale.
 
