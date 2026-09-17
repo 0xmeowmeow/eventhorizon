@@ -129,6 +129,12 @@ class Live:
             self.dust = spin.Parcels(self.mapping["radii"], count=int(self.w * self.h * 2.5),
                                      seed=self.seed, infall=self.o.infall, clumps=0,
                                      spread="log")
+            # How bright each cell should be is fixed for a given map and
+            # window, so it is measured here once rather than every frame.
+            orders = (0,) if self.o.no_ghost else (0, 1)
+            self.field = spin.DotField(self.mapping, self.dust, self.w, self.h, self.extent,
+                                       self.rates, orders, gamma=self.o.ink_gamma,
+                                       projector=self.projector)
         self.resized = False
         # A new grid or a new map makes the old timings about something else,
         # and a re-solve pause would drag the rate down for a second.
@@ -257,10 +263,8 @@ class Live:
         brighten into view on the approaching side, and fill the whole frame
         thinly, because the disk solved for this mode runs far past its edges.
         """
-        orders = (0,) if self.o.no_ghost else (0, 1)
-        lit, brightness = spin.dots(self.mapping, self.dust, self.clock, self.w, self.h,
-                                    self.extent, self.rates, orders,
-                                    gamma=self.o.ink_gamma, projector=self.projector)
+        lit = self.field.frame(self.clock, self.rates)
+        brightness = self.field.target
         name = PALETTE_CYCLE[self.palette_at]
         if name == "ink":
             return cells.braille(lit, INK, PAPER)
@@ -454,17 +458,28 @@ class Live:
                 pane = self.draw()
                 self.costs.append(time.monotonic() - made)
                 self.shown.append(now)
-                sys.stdout.write("\033[H" + pane + "\n")
+                # Synchronised output: kitty and Ghostty hold the screen until the
+                # end marker, so a frame never appears half drawn. A torn frame
+                # reads as a stutter in motion however fast frames arrive.
+                sys.stdout.write("\033[?2026h\033[H" + pane + "\n")
                 if self.show_help:
                     for i, (key, what) in enumerate(HELP):
                         sys.stdout.write(f"\033[{i + 2};3H\033[2K  {key:<8} {what}")
                     sys.stdout.write(f"\033[H")
                 else:
                     sys.stdout.write(f"\033[{self.rows + 1};1H\033[2K{self.status()}")
+                sys.stdout.write("\033[?2026l")
                 sys.stdout.flush()
                 drawn += 1
 
-                spare = interval - (time.monotonic() - now)
+                # Aim each frame at a fixed beat. Sleeping off whatever time is left
+                # lets every frame's own cost push the next one later, so the gaps
+                # between frames vary and even motion looks uneven.
+                due = getattr(self, "_due", now) + interval
+                if due < time.monotonic() - interval:
+                    due = time.monotonic()          # fell far behind: start a new beat
+                self._due = due
+                spare = due - time.monotonic()
                 if spare > 0:
                     time.sleep(spare)
 

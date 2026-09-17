@@ -12,9 +12,9 @@ the fast path is active.
 
 ## Open decisions
 
-- **Frame rate default.** 20fps uses 65% of a core at full screen, 10fps 32%.
-  The inner ring orbits every ~8s, so 10fps looks nearly as smooth. Proposed
-  as the default for a desktop toy; not yet agreed.
+- **Frame rate.** Settled: 30fps is the default and costs about a third of a
+  core at full screen, since brightness per cell is now measured once per map
+  and window instead of every frame.
 - **Ghostty glow.** A custom shader that post-processes what the app draws
   (bloom, phosphor, CRT). Discussed as a later layer; Ghostty shaders get only
   the terminal image, time and size, so no physics can go there.

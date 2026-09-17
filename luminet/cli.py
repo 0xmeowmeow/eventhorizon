@@ -1077,7 +1077,8 @@ def build_parser():
     p.add_argument("--channel", default="flux",
                    choices=["flux", "both", "redshift"], help="what the colour means")
     p.add_argument("--frames", type=int, default=48, help="frames in one loop")
-    p.add_argument("--fps", type=int, default=20)
+    p.add_argument("--fps", type=int, default=30,
+                   help="frames a second; plot1979 costs about a third of a core at 30")
     p.add_argument("--parcels", type=int, default=0,
                    help="how much gas to track; 0 scales it with the resolution")
     p.add_argument("--rings", type=int, default=44, help="radii the map is solved at")

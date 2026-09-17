@@ -51,3 +51,45 @@ def test_compiled_dots_are_right_way_up(disk):
     # of the shadow, so light reaches higher above centre than below it.
     centre = height / 2
     assert (centre - rows.min()) > (rows.max() - centre)
+
+
+@pytest.fixture(scope="module")
+def field_setup(disk):
+    mapping, extent, rates = disk
+    width, height = 120, 64
+    parcels = spin.Parcels(mapping["radii"], count=int(width * height * 2.5), seed=3,
+                           clumps=0, spread="log")
+    return mapping, extent, rates, width, height, parcels
+
+
+def test_dotfield_compiled_matches_numpy(field_setup):
+    """The precomputed field lights the same dots on both paths."""
+    mapping, extent, rates, width, height, parcels = field_setup
+    compiled = spin.DotField(mapping, parcels, width, height, extent, rates,
+                             projector=fast.Projector(mapping, (0, 1)))
+    plain = spin.DotField(mapping, parcels, width, height, extent, rates, projector=None)
+    assert np.allclose(compiled.chance, plain.chance, rtol=0, atol=1e-12)
+    for t in (0.0, 3.3, 27.0):
+        assert np.array_equal(compiled.frame(t, rates).copy(), plain.frame(t, rates).copy())
+
+
+def test_dotfield_keeps_the_look_of_per_frame_dots(field_setup):
+    """
+    Measuring brightness once instead of every frame should not change the
+    picture: over time the dots should fall in the same places, about as thickly.
+    """
+    from scipy.ndimage import uniform_filter
+
+    mapping, extent, rates, width, height, parcels = field_setup
+    projector = fast.Projector(mapping, (0, 1))
+    field = spin.DotField(mapping, parcels, width, height, extent, rates,
+                          gamma=0.6, projector=projector)
+    times = np.linspace(0, 40, 12)
+    per_frame = np.mean([spin.dots(mapping, parcels, t, width, height, extent, rates,
+                                   gamma=0.6, projector=projector)[0] for t in times], axis=0)
+    once = np.mean([field.frame(t, rates).copy() for t in times], axis=0)
+
+    assert abs(once.mean() - per_frame.mean()) < 0.25 * per_frame.mean()
+    a = uniform_filter(per_frame.astype(float), 6).ravel()
+    b = uniform_filter(once.astype(float), 6).ravel()
+    assert np.corrcoef(a, b)[0, 1] > 0.95

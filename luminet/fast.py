@@ -104,6 +104,49 @@ if available:
                     out_flux[i, o] = flux
 
 
+    @nb.njit(cache=True)
+    def _place(ring, jitter, angle0, luck, radii, rates, b_tab, has, phase,
+               ext_x, ext_y, width, height, chance, lit):
+        """Move every parcel and light it or not; no brightness is computed.
+
+        How bright a cell should be does not change over time - a given cell
+        always sees gas at the same place on the disk - so that is worked out
+        once per map and window and passed in as `chance`. What is left per
+        frame is where each parcel has got to, which is only its angle, one
+        table lookup and a sine and cosine.
+        """
+        lit[:] = False
+        n = ring.shape[0]
+        nr = radii.shape[0]
+        na = b_tab.shape[2]
+        two_pi = 2.0 * np.pi
+        for i in range(n):
+            rg = ring[i]
+            up = rg + 1 if rg + 1 < nr else nr - 1
+            fr = jitter[i]
+            ang = (angle0[i] + rates[rg] * phase) % two_pi
+            col = ang / two_pi * (na - 1)
+            floor_col = np.floor(col)
+            lo = int(floor_col) % na
+            hi = (lo + 1) % na
+            ft = col - floor_col
+            sa = np.sin(ang)
+            ca = np.cos(ang)
+            for o in range(2):
+                if not has[o]:
+                    continue
+                b = ((1.0 - fr) * ((1.0 - ft) * b_tab[o, rg, lo] + ft * b_tab[o, rg, hi])
+                     + fr * ((1.0 - ft) * b_tab[o, up, lo] + ft * b_tab[o, up, hi]))
+                if not np.isfinite(b):
+                    continue
+                ci = int((b * sa / ext_x + 1.0) / 2.0 * (width - 1))
+                ri = int((b * ca / ext_y + 1.0) / 2.0 * (height - 1))
+                if 0 <= ci < width and 0 <= ri < height:
+                    k = ri * width + ci
+                    if luck[i] < chance[o, k]:
+                        lit[k] = True
+
+
 class Projector:
     """Holds the lensing map in the flat form the compiled loop reads.
 
@@ -141,3 +184,10 @@ class Projector:
         keep = flat >= 0
         luck = np.repeat(parcels.luck, 2)
         return flat[keep], self._flux.ravel()[keep], luck[keep]
+
+    def place(self, parcels, phase, rates, ext_x, ext_y, width, height, chance, lit):
+        """Light this frame's dots from a precomputed per-cell chance."""
+        _place(parcels.ring, parcels.jitter, parcels.angle0, parcels.luck, self.radii,
+               np.ascontiguousarray(rates, dtype=np.float64), self.b, self.has,
+               float(phase), float(ext_x), float(ext_y), int(width), int(height),
+               chance, lit)

@@ -454,6 +454,169 @@ def _light(idx, flux, luck, width, height, gamma, smooth):
     return lit.reshape(height, width), target.reshape(height, width)
 
 
+class DotField:
+    """The 1979 look, split into what changes each frame and what does not.
+
+    Where a parcel is changes every frame. How likely a screen cell is to show a
+    dot does not: a given cell always sees gas at the same place on the disk,
+    with the same Doppler shift, so its brightness is a fixed property of the
+    map and the window. Measuring that once, averaged over a spread of moments,
+    leaves each frame nothing to do but move the parcels and look them up - and
+    because it is averaged rather than re-measured, the brightness scale no
+    longer wobbles slightly from frame to frame.
+
+    Parcels are kept with the same rule as dots(): each carries a lifetime
+    random number and lights its cell when that is under the cell's chance,
+    1 - (1 - target) ** (1 / n), n being how many samples usually land there.
+    """
+
+    def __init__(self, mapping, parcels, width, height, extent, rates, orders=(0, 1),
+                 gamma=0.6, smooth=1.4, projector=None, moments=12):
+        from scipy.ndimage import gaussian_filter
+
+        self.mapping, self.parcels = mapping, parcels
+        self.width, self.height = width, height
+        self.orders, self.projector = orders, projector
+        if isinstance(extent, (tuple, list)):
+            self.ext_x, self.ext_y = fit_extent(extent[0], width, height, reach_y=extent[1])
+        else:
+            self.ext_x, self.ext_y = fit_extent(extent, width, height)
+        cells_n = width * height
+
+        # Accumulate per order: the two images sit on top of each other, and a
+        # sample from one should be judged against its own image's density.
+        total = np.zeros((2, cells_n))
+        count = np.zeros((2, cells_n))
+        scales = []
+        span = 2 * np.pi / max(float(np.max(rates)), 1e-9)
+        for k in range(moments):
+            t = span * k / moments
+            moment_total = np.zeros(cells_n)
+            moment_count = np.zeros(cells_n)
+            for o, (idx, flux) in self._samples(t, rates):
+                f = np.bincount(idx, weights=flux, minlength=cells_n)
+                c = np.bincount(idx, minlength=cells_n)
+                total[o] += f
+                count[o] += c
+                moment_total += f
+                moment_count += c
+            # The brightness scale is set the way a single frame sets it, from
+            # that frame's own peaks. Taking it from the averaged field instead
+            # smooths the peaks away, lowers the scale, and lights noticeably
+            # more of the dim outer disk than the look this matches.
+            scales.append(self._scale(moment_total, moment_count, smooth))
+        count /= moments
+        total /= moments
+
+        # Brightness per cell, as dots() measures it: a mean over whatever lands
+        # there, both images together, smoothed, the shadow kept black.
+        both_n = count.sum(axis=0)
+        mean = (total.sum(axis=0) / np.maximum(both_n, 1e-9)).reshape(height, width)
+        if smooth > 0:
+            covered = gaussian_filter((both_n > 0).reshape(height, width).astype(float), smooth)
+            mean = gaussian_filter(mean, smooth) / np.maximum(covered, 1e-6)
+            mean[both_n.reshape(height, width) == 0] = 0.0
+        mean = mean.ravel()
+        scale = float(np.mean(scales)) if scales else 1.0
+        target = np.clip(mean / max(scale, 1e-30), 0.0, 1.0) ** gamma
+        self.target = target.reshape(height, width)
+
+        # A cell is lit if any of its samples draws under the chance, so each
+        # sample's chance is set from how many usually arrive - but never from
+        # fewer than one. Where the disk is thin a cell is often empty, and
+        # dividing by a fractional count would top each lone sample up to make
+        # good the frames it is absent from. Measured per frame, as dots() does,
+        # an empty cell simply stays dark, so the faint outer disk looks faint;
+        # topping it up lit a third more dots there than the look this matches.
+        n = np.maximum(both_n, 1.0)
+        self.chance = np.empty((2, cells_n))
+        self.chance[:] = 1.0 - (1.0 - target[None, :]) ** (1.0 / n[None, :])
+        self.lit = np.zeros(cells_n, dtype=np.bool_)
+
+    def _scale(self, total, count, smooth):
+        """The 99.3rd percentile of one moment's smoothed brightness."""
+        from scipy.ndimage import gaussian_filter
+
+        h, w = self.height, self.width
+        mean = (total / np.maximum(count, 1)).reshape(h, w)
+        if smooth > 0:
+            covered = gaussian_filter((count > 0).reshape(h, w).astype(float), smooth)
+            mean = gaussian_filter(mean, smooth) / np.maximum(covered, 1e-6)
+            mean[count.reshape(h, w) == 0] = 0.0
+        positive = mean[mean > 0]
+        return np.percentile(positive, 99.3) if positive.size else 1.0
+
+    def _samples(self, t, rates):
+        """Cell and flux of every sample at time t, one pair per image order."""
+        if self.projector is not None:
+            # One projection covers both images; split them apart afterwards.
+            self.projector(self.parcels, t, rates, self.ext_x, self.ext_y,
+                           self.width, self.height)
+            out = []
+            for order in self.orders:
+                where = self.projector._idx[:, order]
+                ok = where >= 0
+                out.append((order, (where[ok], self.projector._flux[:, order][ok])))
+            return out
+        return [(order, self._samples_numpy(t, rates, order)) for order in self.orders]
+
+    def _samples_numpy(self, t, rates, order):
+        mapping = self.mapping
+        radii, angles, bh = mapping["radii"], mapping["angles"], mapping["bh"]
+        p = self.parcels
+        ring, _, angle = p.at(t, radii, None, rates)
+        upper = np.minimum(ring + 1, len(radii) - 1)
+        col = angle / (2 * np.pi) * (len(angles) - 1)
+        lo = np.floor(col).astype(int) % len(angles)
+        hi = (lo + 1) % len(angles)
+        f = col - np.floor(col)
+        between = p.jitter
+        b_t, z_t = mapping["tables"][order]
+        look = lambda tb: ((1 - between) * ((1 - f) * tb[ring, lo] + f * tb[ring, hi])
+                           + between * ((1 - f) * tb[upper, lo] + f * tb[upper, hi]))
+        b, z = look(b_t), look(z_t)
+        r_b = (1 - between) * radii[ring] + between * radii[upper]
+        good = np.isfinite(b) & np.isfinite(z)
+        flux = bhmath.calc_flux_observed(r_b[good], bh.acc, bh.mass, z[good])
+        if order == 1:
+            flux = flux * 0.45
+        ci = ((b[good] * np.sin(angle[good]) / self.ext_x + 1) / 2 * (self.width - 1)).astype(np.int64)
+        ri = ((b[good] * np.cos(angle[good]) / self.ext_y + 1) / 2 * (self.height - 1)).astype(np.int64)
+        inside = ((ci >= 0) & (ci < self.width) & (ri >= 0) & (ri < self.height)
+                  & np.isfinite(flux))
+        return ri[inside] * self.width + ci[inside], flux[inside]
+
+    def frame(self, t, rates):
+        """Which dots are lit at time t."""
+        if self.projector is not None:
+            self.projector.place(self.parcels, t, rates, self.ext_x, self.ext_y,
+                                 self.width, self.height, self.chance, self.lit)
+            return self.lit.reshape(self.height, self.width)
+        self.lit[:] = False
+        luck = self.parcels.luck
+        for o in self.orders:
+            mapping = self.mapping
+            radii, angles = mapping["radii"], mapping["angles"]
+            p = self.parcels
+            ring, _, angle = p.at(t, radii, None, rates)
+            upper = np.minimum(ring + 1, len(radii) - 1)
+            col = angle / (2 * np.pi) * (len(angles) - 1)
+            lo = np.floor(col).astype(int) % len(angles)
+            hi = (lo + 1) % len(angles)
+            f = col - np.floor(col)
+            tb = mapping["tables"][o][0]
+            b = ((1 - p.jitter) * ((1 - f) * tb[ring, lo] + f * tb[ring, hi])
+                 + p.jitter * ((1 - f) * tb[upper, lo] + f * tb[upper, hi]))
+            good = np.isfinite(b)
+            ci = ((b[good] * np.sin(angle[good]) / self.ext_x + 1) / 2 * (self.width - 1)).astype(np.int64)
+            ri = ((b[good] * np.cos(angle[good]) / self.ext_y + 1) / 2 * (self.height - 1)).astype(np.int64)
+            inside = (ci >= 0) & (ci < self.width) & (ri >= 0) & (ri < self.height)
+            k = ri[inside] * self.width + ci[inside]
+            on = luck[good][inside] < self.chance[o, k]
+            self.lit[k[on]] = True
+        return self.lit.reshape(self.height, self.width)
+
+
 def reach(mapping, orders=(0, 1), max_radius=None):
     """How far the image extends across and down, so every frame shares a scale.
 
