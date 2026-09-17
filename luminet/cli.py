@@ -1114,6 +1114,19 @@ def build_parser():
     p.add_argument("--pixels", action="store_true",
                    help="plot1979 in real pixels, through the kitty graphics protocol "
                         "(kitty or Ghostty); x toggles it while running")
+    p.add_argument("--lines", default="",
+                   help="plot1979: line families to start with, from radii, redshift, flux")
+    p.add_argument("--line-style", default="solid",
+                   choices=["solid", "flowing", "dotted", "pulse", "sweep"])
+    p.add_argument("--line-colour", default="blue",
+                   choices=["blue", "ink", "palette", "redshift", "flux", "spectrum"])
+    p.add_argument("--line-width", type=int, default=2, help="pixels mode, 1 to 6")
+    p.add_argument("--iso-radii", default="", help="direct isoradials, e.g. 6,10,15,20")
+    p.add_argument("--iso-ghost", default="", help="ghost isoradials, e.g. 6,20,50,100")
+    p.add_argument("--redshift-levels", default="",
+                   help="isoredshifts as z, e.g. -0.2,-0.1,0,0.1,0.2,0.3,0.4")
+    p.add_argument("--flux-levels", default="",
+                   help="isofluxlines as fractions of the brightest, e.g. 0.01,0.03,0.1,0.3,1")
     p.add_argument("--dust", type=float, default=0.012,
                    help="plot1979: least chance of a dot wherever the disk sends any light, "
                         "so its faint outer reaches still show a thin dust. d and D change it")

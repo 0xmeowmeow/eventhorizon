@@ -141,8 +141,6 @@ class PixelView:
                                        extent, rates, orders, gamma=gamma,
                                        projector=projector, floor=floor)
             ext_x, ext_y = self.field.ext_x, self.field.ext_y
-            self.lines = spin.Isolines(mapping, self.px_w, self.px_h, ext_x, ext_y,
-                                       samples=int(8 * max(self.px_w, self.px_h)))
         finally:
             spin.CELL_ASPECT = saved
         self.ext_x, self.ext_y = ext_x, ext_y
@@ -152,6 +150,10 @@ class PixelView:
         self.background = None
         self.cell_rgb = None
         self.look = None
+        # The line set is built by the caller, which knows the line settings;
+        # the dot field is what it reads its maps from.
+        self.lineset = None
+        self.field_for_lines = self.field
 
     # ------------------------------------------------------------- still parts
 
@@ -225,8 +227,7 @@ class PixelView:
 
     # ------------------------------------------------------------------ frame
 
-    def frame(self, t, rates, dots_on=True, overlay="off", line_rgb=(150, 205, 235),
-              ink=(238, 230, 210)):
+    def frame(self, t, rates, dots_on=True, lines=None, line_width=2):
         img = self.background.copy()
         if dots_on:
             if self.projector is not None:
@@ -235,9 +236,9 @@ class PixelView:
                                      self.cell_rgb, img, self.dot)
             else:
                 self._paint_numpy(img, t, rates)
-        if overlay != "off":
-            mask = self.lines.frame(t, rates, flowing=overlay == "flowing")
-            img[mask] = line_rgb if dots_on else ink
+        if lines and self.lineset is not None:
+            idx, rgb = self.lineset.draw(t, rates, width=line_width, **lines)
+            img.reshape(-1, 3)[idx] = rgb
         return self.transport.escape(img, self.cols, self.rows)
 
     def _paint_numpy(self, img, t, rates):

@@ -41,7 +41,7 @@ PAPER = (14, 16, 13)     # the print is not quite black
 LINE = (150, 205, 235)   # isoradials drawn over the dots
 HOLE = (0, 0, 0)         # the shadow, darker than the paper
 GLOW_CYCLE = ["match"]   # the glow's own palette; "match" follows the dots
-OVERLAYS = ["off", "lines", "flowing"]
+from luminet.lines import COLOURS as LINE_COLOURS, STYLES as LINE_STYLES
 
 PALETTE_CYCLE = ["ink", "ember", "inferno", "magma", "amber", "phosphor", "ice",
                  "plasma", "cividis", "bone", "copper", "gameboy", "bw"]
@@ -65,7 +65,10 @@ HELP = [
     ("-  =", "disk size  (re-solves)"),
     (",  .", "mass  (re-solves)"),
     ("e  E", "encoding: half, sextant, braille, 1979 plot"),
-    ("i", "1979: isoradials off, drawn, flowing"),
+    ("i u j", "1979: isoradials, isoredshifts, isofluxlines on or off"),
+    ("l  L", "1979: line style: solid, flowing, dotted, pulse, sweep"),
+    ("t  T", "1979: line colour: blue, ink, palette, redshift, flux, spectrum"),
+    ("w  W", "1979: thinner or thicker lines (pixels)"),
     ("k  K", "1979: glow palette, separate from the dots"),
     ("m", "1979: keep the glow out of the shadow"),
     ("d  D", "1979: less or more dust where the disk is faint"),
@@ -148,7 +151,10 @@ class Live:
         self.vignette_on = opts.vignette
         self.feather_on = True
         self.encoding = opts.encoding
-        self.overlay = 0
+        self.families = set(f for f in getattr(opts, "lines", "").split(",") if f)
+        self.line_style = LINE_STYLES.index(getattr(opts, "line_style", "solid"))
+        self.line_colour = LINE_COLOURS.index(getattr(opts, "line_colour", "blue"))
+        self.line_width = int(getattr(opts, "line_width", 2))
         self.dots_on = True
         self.glow_at = 0
         self.mask_on = True
@@ -230,8 +236,7 @@ class Live:
             self.field = spin.DotField(self.mapping, self.dust_parcels, self.w, self.h,
                                        self.extent, self.rates, orders, gamma=self.o.ink_gamma,
                                        projector=self.projector, floor=self.dust)
-            self.isolines = spin.Isolines(self.mapping, self.w, self.h,
-                                          self.field.ext_x, self.field.ext_y)
+            self.lineset = self.make_lineset(self.field, self.w, self.h)
             self.hole = self.shadow_coverage()
         self.resized = False
         # A new grid or a new map makes the old timings about something else,
@@ -378,20 +383,24 @@ class Live:
             view.restyle(PALETTE_CYCLE[self.palette_at], GLOW_CYCLE[self.glow_at],
                          self.bloom, self.mask_on, self.vignette_on, self.scanlines_on,
                          INK, PAPER, HOLE)
+            if getattr(view, "lineset", None) is None:
+                view.lineset = self.make_lineset(view.field_for_lines, view.px_w, view.px_h)
             return view.frame(self.clock, self.rates, dots_on=self.dots_on,
-                              overlay=OVERLAYS[self.overlay], line_rgb=LINE, ink=INK)
+                              lines=self.line_args() if self.families else None,
+                              line_width=self.line_width)
 
         if self.dots_on:
             lit = self.field.frame(self.clock, self.rates).copy()
         else:
             lit = np.zeros((self.h, self.w), dtype=bool)
         line_cells = None
-        if self.overlay:
-            lines = self.isolines.frame(self.clock, self.rates,
-                                        flowing=OVERLAYS[self.overlay] == "flowing")
-            lit |= lines
-            line_cells = lines[:self.rows * 4, :self.cols * 2].reshape(
-                self.rows, 4, self.cols, 2).any(axis=(1, 3))
+        if self.families:
+            idx, rgb = self.lineset.draw(self.clock, self.rates, width=1, **self.line_args())
+            lit.reshape(-1)[idx] = True
+            rows_i, cols_i = np.divmod(idx, self.w)
+            cell = (rows_i // 4) * self.cols + cols_i // 2
+            ok = (rows_i < self.rows * 4) & (cols_i < self.cols * 2)
+            line_cells = (cell[ok], rgb[ok])
 
         name = PALETTE_CYCLE[self.palette_at]
         effects = (self.bloom > 0 or self.scanlines_on or self.vignette_on
@@ -414,7 +423,8 @@ class Live:
             colours = cells._ramp(tone, stops).astype(np.float32)
             glow_colour = np.array(stops[len(stops) * 2 // 3], dtype=np.float32)
         if line_cells is not None:
-            colours[line_cells] = LINE if self.dots_on else INK
+            # A braille cell has one colour; a line crossing it takes it.
+            colours.reshape(-1, 3)[line_cells[0]] = line_cells[1]
 
         backgrounds = np.empty((rows, cols, 3), dtype=np.float32)
         backgrounds[:] = PAPER
@@ -454,6 +464,24 @@ class Live:
         return cells.braille(lit, INK, PAPER,
                              colours=np.clip(colours, 0, 255).astype(np.uint8),
                              backgrounds=np.clip(backgrounds, 0, 255).astype(np.uint8))
+
+    def make_lineset(self, field, width, height):
+        from luminet import lines
+
+        o = self.o
+        def numbers(text, default):
+            return tuple(float(v) for v in text.split(",") if v.strip()) if text else default
+        return lines.LineSet(
+            self.mapping, field, width, height, field.ext_x, field.ext_y,
+            radii=numbers(getattr(o, "iso_radii", ""), (6, 10, 15, 20)),
+            ghost=numbers(getattr(o, "iso_ghost", ""), (6, 20, 50, 100)),
+            redshifts=numbers(getattr(o, "redshift_levels", ""), lines.DEFAULT_REDSHIFTS),
+            flux_levels=numbers(getattr(o, "flux_levels", ""), lines.DEFAULT_FLUX_LEVELS))
+
+    def line_args(self):
+        return dict(families=self.families, style=LINE_STYLES[self.line_style],
+                    colour=LINE_COLOURS[self.line_colour],
+                    palette=cells.palette(PALETTE_CYCLE[self.palette_at]))
 
     def clear_images(self):
         """Remove any picture placed with the graphics protocol."""
@@ -537,8 +565,10 @@ class Live:
             bits.append("compiled" if self.projector is not None else "numpy")
             if self.pixels_on:
                 bits.append(f"pixels by {self.transport_mode or '?'}")
-            if self.overlay:
-                bits.append(f"isoradials {OVERLAYS[self.overlay]}")
+            if self.families:
+                names = "+".join(f for f in ("radii", "redshift", "flux") if f in self.families)
+                bits.append(f"lines {names} {LINE_STYLES[self.line_style]} "
+                            f"{LINE_COLOURS[self.line_colour]}")
             if not self.dots_on:
                 bits.append("dots hidden")
             if self.bloom > 0:
@@ -582,8 +612,9 @@ class Live:
             self.note = (f"{what} is for half, sextant and braille; plot1979 has none",
                          time.monotonic() + 3.0)
             return True
-        if self.encoding != "plot1979" and key in ("i", "o", "k", "K", "m", "x"):
-            self.note = ("isoradials, hiding dots, glow palette, mask and pixels are plot1979 only",
+        if self.encoding != "plot1979" and key in ("i", "u", "j", "l", "L", "t", "T",
+                                                     "w", "W", "o", "k", "K", "m", "x"):
+            self.note = ("lines, hiding dots, glow palette, mask and pixels are plot1979 only",
                          time.monotonic() + 3.0)
             return True
         elif key == " ":
@@ -627,8 +658,18 @@ class Live:
             if (self.encoding == "plot1979") != getattr(self, "solved_for", False):
                 self.solve("the 1979 disk" if self.encoding == "plot1979" else "the disk")
             self.resized = True
-        elif key == "i":
-            self.overlay = (self.overlay + 1) % len(OVERLAYS)
+        elif key in ("i", "u", "j"):
+            family = {"i": "radii", "u": "redshift", "j": "flux"}[key]
+            self.families ^= {family}
+        elif key in ("l", "L"):
+            self.line_style = (self.line_style + (1 if key == "l" else -1)) % len(LINE_STYLES)
+        elif key in ("t", "T"):
+            self.line_colour = (self.line_colour + (1 if key == "t" else -1)) % len(LINE_COLOURS)
+        elif key in ("w", "W"):
+            self.line_width = int(np.clip(self.line_width + (1 if key == "W" else -1), 1, 6))
+            if not self.pixels_on:
+                self.note = ("line width is for pixel mode (x); braille lines are one dot",
+                             time.monotonic() + 2.5)
         elif key == "o":
             self.dots_on = not self.dots_on
         elif key in ("k", "K"):

@@ -50,7 +50,7 @@ if available:
     # uses NaN to mean "no light reaches here".
     @nb.njit(cache=True)
     def _project(ring, jitter, angle0, radii, rates, b_tab, z_tab, has, phase,
-                 mass, acc, ext_x, ext_y, width, height, out_idx, out_flux):
+                 mass, acc, ext_x, ext_y, width, height, out_idx, out_flux, out_z):
         n = ring.shape[0]
         nr = radii.shape[0]
         na = b_tab.shape[2]
@@ -102,6 +102,7 @@ if available:
                 if 0 <= ci < width and 0 <= ri < height:
                     out_idx[i, o] = ri * width + ci
                     out_flux[i, o] = flux
+                    out_z[i, o] = z
 
 
     @nb.njit(cache=True)
@@ -232,10 +233,11 @@ class Projector:
         if self._idx is None or self._idx.shape[0] != n:
             self._idx = np.empty((n, 2), dtype=np.int64)
             self._flux = np.zeros((n, 2))
+            self._z = np.zeros((n, 2))
         _project(parcels.ring, parcels.jitter, parcels.angle0, self.radii,
                  np.ascontiguousarray(rates, dtype=np.float64), self.b, self.z,
                  self.has, float(phase), self.mass, self.acc, float(ext_x),
-                 float(ext_y), int(width), int(height), self._idx, self._flux)
+                 float(ext_y), int(width), int(height), self._idx, self._flux, self._z)
         flat = self._idx.ravel()
         keep = flat >= 0
         luck = np.repeat(parcels.luck, 2)

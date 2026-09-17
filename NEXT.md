@@ -22,6 +22,12 @@ the fast path is active.
   inline. Full screen costs about 55% of a core at 30fps, against 34% for
   braille. Dots are sparser than the plate; --pixel-grain and --ink-gamma tune it.
 
+- **Inclination and zoom in real time.** Discussed, not built. Tilting now
+  re-solves the lensing map and rebuilds the dot field, about 1-3 seconds a
+  step. Real time would mean precomputing maps across a range of inclinations
+  once, in a subprocess, and blending between neighbours. Zoom could resample
+  the per-cell brightness while the gesture lasts and re-measure after.
+
 ## Known rough edges
 
 - `--infall` shifts gas between discrete rings rather than moving it smoothly.

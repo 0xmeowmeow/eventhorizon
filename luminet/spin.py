@@ -507,15 +507,19 @@ class DotField:
         # sample from one should be judged against its own image's density.
         total = np.zeros((2, cells_n))
         count = np.zeros((2, cells_n))
+        z_total = np.zeros(cells_n)
         scales = []
         span = 2 * np.pi / max(float(np.max(rates)), 1e-9)
         for k in range(moments):
             t = span * k / moments
             moment_total = np.zeros(cells_n)
             moment_count = np.zeros(cells_n)
-            for o, (idx, flux) in self._samples(t, rates):
+            for o, (idx, flux, zf) in self._samples(t, rates):
                 f = np.bincount(idx, weights=flux, minlength=cells_n)
                 c = np.bincount(idx, minlength=cells_n)
+                # Redshift weighted by flux: where two images overlap, the one
+                # that is brighter is the one whose shift you would measure.
+                z_total += np.bincount(idx, weights=zf * flux, minlength=cells_n)
                 total[o] += f
                 count[o] += c
                 moment_total += f
@@ -541,8 +545,18 @@ class DotField:
             mean[both_n.reshape(height, width) == 0] = 0.0
         mean = mean.ravel()
         scale = float(np.mean(scales)) if scales else 1.0
+        self.scale = scale
         target = np.clip(mean / max(scale, 1e-30), 0.0, 1.0) ** gamma
         self.lit_by_disk = mean > 0
+        # What the line families read: brightness relative to the scale the
+        # dots use, and the redshift factor, per cell. NaN where no light
+        # arrives, so a contour never runs across empty sky.
+        all_flux = total.sum(axis=0) * moments
+        with np.errstate(invalid="ignore", divide="ignore"):
+            self.flux_level = np.where(self.lit_by_disk, mean / max(scale, 1e-30),
+                                       np.nan).reshape(height, width)
+            self.redshift = np.where(all_flux > 0, z_total / all_flux,
+                                     np.nan).reshape(height, width)
         self.base_target = target
         self.n = both_n
         self.chance = np.empty((2, cells_n))
@@ -598,7 +612,8 @@ class DotField:
             for order in self.orders:
                 where = self.projector._idx[:, order]
                 ok = where >= 0
-                out.append((order, (where[ok], self.projector._flux[:, order][ok])))
+                out.append((order, (where[ok], self.projector._flux[:, order][ok],
+                                    self.projector._z[:, order][ok])))
             return out
         return [(order, self._samples_numpy(t, rates, order)) for order in self.orders]
 
@@ -626,7 +641,7 @@ class DotField:
         ri = ((b[good] * np.cos(angle[good]) / self.ext_y + 1) / 2 * (self.height - 1)).astype(np.int64)
         inside = ((ci >= 0) & (ci < self.width) & (ri >= 0) & (ri < self.height)
                   & np.isfinite(flux))
-        return ri[inside] * self.width + ci[inside], flux[inside]
+        return ri[inside] * self.width + ci[inside], flux[inside], z[good][inside]
 
     def frame(self, t, rates):
         """Which dots are lit at time t."""
