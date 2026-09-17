@@ -1189,6 +1189,10 @@ def build_parser():
     sub.add_parser("tui", help="the interactive instrument: parameters and a live preview")
     sub.add_parser("menu", help="the prompt-based menu")
 
+    p = sub.add_parser("_bank")  # internal: fills the inclination bank in the background
+    p.add_argument("--start", type=float, default=1.4)
+    p.set_defaults(func=lambda a: (__import__("luminet.bank", fromlist=["bank"]).build(a.start), 0)[1])
+
     p = sub.add_parser("_draw")  # internal: used by the TUI to render out of process
     p.add_argument("--settings", required=True)
     p.add_argument("-o", "--output", required=True)

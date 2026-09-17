@@ -491,16 +491,20 @@ class DotField:
     """
 
     def __init__(self, mapping, parcels, width, height, extent, rates, orders=(0, 1),
-                 gamma=0.6, smooth=1.4, projector=None, moments=12, floor=0.0):
+                 gamma=0.6, smooth=1.4, projector=None, moments=12, floor=0.0,
+                 cell_aspect=None):
         from scipy.ndimage import gaussian_filter
 
         self.mapping, self.parcels = mapping, parcels
         self.width, self.height = width, height
         self.orders, self.projector = orders, projector
+        # The sample shape is passed in rather than read from the module, so a
+        # field can be built on another thread while the view draws.
         if isinstance(extent, (tuple, list)):
-            self.ext_x, self.ext_y = fit_extent(extent[0], width, height, reach_y=extent[1])
+            self.ext_x, self.ext_y = fit_extent(extent[0], width, height, cell_aspect,
+                                                reach_y=extent[1])
         else:
-            self.ext_x, self.ext_y = fit_extent(extent, width, height)
+            self.ext_x, self.ext_y = fit_extent(extent, width, height, cell_aspect)
         cells_n = width * height
 
         # Accumulate per order: the two images sit on top of each other, and a
@@ -674,6 +678,94 @@ class DotField:
         return self.lit.reshape(self.height, self.width)
 
 
+class LiveField:
+    """Dot brightness measured from this moment alone, for while the view moves.
+
+    DotField averages a dozen moments and smooths the result, which is right
+    for a still view and far too slow for one that changes every frame. This
+    measures once per frame - a projection and two bincounts - and uses the
+    same lighting rule. Its brightness scale is eased from frame to frame
+    rather than re-taken each time, or the exposure would flicker as the view
+    tilts. When the view comes to rest, a DotField takes over again.
+    """
+
+    def __init__(self, width, height, gamma=0.6, floor=0.0, scale=None, cell_aspect=None,
+                 stride=1):
+        self.width, self.height = width, height
+        self.cell_aspect = cell_aspect
+        # Measure brightness from every stride-th parcel. The estimate only has
+        # to be good enough to look right while the view moves, and projection
+        # was half of a moving frame; counts are scaled back up to the whole.
+        self.stride = max(1, int(stride))
+        self._subset = None
+        self.gamma, self.floor = gamma, floor
+        self.scale = scale
+        self.chance = np.zeros((2, width * height))
+        self.lit = np.zeros(width * height, dtype=np.bool_)
+
+    def measure(self, parcels, t, rates, extent, projector):
+        if isinstance(extent, (tuple, list)):
+            ext_x, ext_y = fit_extent(extent[0], self.width, self.height, self.cell_aspect,
+                                      reach_y=extent[1])
+        else:
+            ext_x, ext_y = fit_extent(extent, self.width, self.height, self.cell_aspect)
+        self.ext_x, self.ext_y = ext_x, ext_y
+        self.parcels, self.projector = parcels, projector
+        cells_n = self.width * self.height
+        sample = parcels
+        if self.stride > 1:
+            if self._subset is None or self._subset[0] is not parcels:
+                from types import SimpleNamespace
+
+                k = self.stride
+                self._subset = (parcels, SimpleNamespace(
+                    ring=np.ascontiguousarray(parcels.ring[::k]),
+                    jitter=np.ascontiguousarray(parcels.jitter[::k]),
+                    angle0=np.ascontiguousarray(parcels.angle0[::k]),
+                    luck=np.ascontiguousarray(parcels.luck[::k]),
+                    count=len(parcels.ring[::k])))
+            sample = self._subset[1]
+        idx, flux, _ = projector(sample, t, rates, ext_x, ext_y, self.width, self.height)
+        measured = np.bincount(idx, minlength=cells_n).astype(float)
+        total = np.bincount(idx, weights=flux, minlength=cells_n)
+        # Brightness is an average over the parcels measured; only the lighting
+        # rule needs the count scaled up to every parcel that will be drawn.
+        mean = total / np.maximum(measured, 1.0)
+        count = measured * self.stride
+        if self.stride > 1:
+            # A cell the measured subset happened to miss is not dark: the full
+            # set of parcels still reaches it. Spread brightness and count over
+            # neighbouring cells, weighting by what was measured, so thin areas
+            # keep their light instead of dropping out while the view moves.
+            from scipy.ndimage import gaussian_filter
+
+            grid = (self.height, self.width)
+            weight = gaussian_filter(measured.reshape(grid), 1.2)
+            spread = gaussian_filter(total.reshape(grid), 1.2)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                mean = np.where(weight > 1e-3, spread / np.maximum(weight, 1e-12), 0.0).ravel()
+            count = (weight * self.stride).ravel()
+        lit_by_disk = count > 0.05
+        positive = mean[lit_by_disk]
+        if positive.size:
+            now = float(np.percentile(positive, 99.3))
+            self.scale = now if self.scale is None else 0.85 * self.scale + 0.15 * now
+        scale = max(self.scale or 1.0, 1e-30)
+        target = np.clip(mean / scale, 0.0, 1.0) ** self.gamma
+        target = np.where(lit_by_disk, self.floor + (1.0 - self.floor) * target, 0.0)
+        self.target = target.reshape(self.height, self.width)
+        self.chance[:] = 1.0 - (1.0 - target[None, :]) ** (1.0 / np.maximum(count, 1.0))[None, :]
+        front = projector._idx[:, 0]
+        front = front[front >= 0]
+        self.front = np.bincount(front, minlength=cells_n).reshape(self.height, self.width)
+        return self
+
+    def frame(self, t, rates):
+        self.projector.place(self.parcels, t, rates, self.ext_x, self.ext_y,
+                             self.width, self.height, self.chance, self.lit)
+        return self.lit.reshape(self.height, self.width)
+
+
 class Isolines:
     """Isoradials traced on the dot grid, for drawing over the 1979 dots.
 
@@ -739,6 +831,10 @@ def reach(mapping, orders=(0, 1), max_radius=None):
     angles = mapping["angles"]
     rows = (slice(None) if max_radius is None
             else mapping["radii"] <= max_radius)
+    if max_radius is not None and not np.any(rows):
+        # Nothing inside the radius asked for: frame the innermost rings rather
+        # than fall back to a one-unit window onto nothing.
+        rows = np.arange(len(mapping["radii"])) < 3
     rx = ry = 1.0
     for order in orders:
         if order not in mapping["tables"]:

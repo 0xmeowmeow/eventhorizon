@@ -61,9 +61,9 @@ HELP = [
     ("f", "soften the edge"),
     ("a", "antialiasing (costs frame rate)"),
     ("r", "re-seed the gas"),
-    ("[  ]", "inclination  (re-solves)"),
-    ("-  =", "disk size  (re-solves)"),
-    (",  .", "mass  (re-solves)"),
+    ("[  ]", "inclination  (smooth once the bank is built)"),
+    ("-  =  z  Z", "zoom: disk size  (smooth once the bank is built)"),
+    (",  .", "mass  (smooth once the bank is built)"),
     ("e  E", "encoding: half, sextant, braille, 1979 plot"),
     ("i u j", "1979: isoradials, isoredshifts, isofluxlines on or off"),
     ("l  L", "1979: line style: solid, flowing, dotted, pulse, sweep"),
@@ -159,6 +159,19 @@ class Live:
         self.glow_at = 0
         self.mask_on = True
         self.pixels_on = bool(getattr(opts, "pixels", False))
+        # Continuous tilt, zoom and mass: the physics keys set a goal the view
+        # eases towards, drawn from the bank of maps while it moves.
+        from luminet.bank import Bank
+
+        self.bank = Bank()
+        self.using_bank = False
+        self.goal = None
+        self.moving = False
+        self.rest_at = 0.0
+        self.generation = 0
+        self.rebuilding = None
+        self.rebuilt = None
+        self.live = None
         self.dust = float(getattr(opts, "dust", 0.012))
         self.transport_mode = None     # found by probing, the first time it is needed
         self.pixel_view = None
@@ -191,6 +204,7 @@ class Live:
         # same resize signal and changes the cell's shape.
         self.cell_px, self.cell_measured = cell_size()
         spin.CELL_ASPECT = spin.sample_aspect(*self.cell_px, sub["x"], sub["y"])
+        self.cell_aspect = spin.CELL_ASPECT
         # Only half-block needs supersampling: the others already sample well
         # below a cell, which is what smooths their edges.
         use_ss = self.ss if self.encoding == "half" else 1
@@ -235,9 +249,11 @@ class Live:
             orders = (0,) if self.o.no_ghost else (0, 1)
             self.field = spin.DotField(self.mapping, self.dust_parcels, self.w, self.h,
                                        self.extent, self.rates, orders, gamma=self.o.ink_gamma,
-                                       projector=self.projector, floor=self.dust)
+                                       projector=self.projector, floor=self.dust,
+                                       cell_aspect=self.cell_aspect)
             self.lineset = self.make_lineset(self.field, self.w, self.h)
-            self.hole = self.shadow_coverage()
+            self.hole = self.shadow_coverage(self.field, self.mapping)
+        self.live = None
         self.resized = False
         # A new grid or a new map makes the old timings about something else,
         # and a re-solve pause would drag the rate down for a second.
@@ -268,8 +284,46 @@ class Live:
         wide["outer_edge"] = float(min(2000.0, base * max(1.0, tilt)))
         return wide
 
+    def framing(self, mapping):
+        """How much of the sky to show, from the zoom setting.
+
+        The zoom is a radius to frame, but mass scales the whole geometry, so a
+        radius smaller than the disk's own inner edge frames nothing: zoomed
+        right in at mass 3 the inner edge is at 18 and nothing lay inside 8, and
+        the view collapsed. The framed radius never goes inside half again the
+        inner edge.
+        """
+        orders = (0,) if self.o.no_ghost else (0, 1)
+        radius = max(self.settings["outer_edge"] * 0.85, float(mapping["radii"][0]) * 1.5)
+        rx, ry = spin.reach(mapping, orders, max_radius=radius)
+        return (rx * 0.78, ry * 0.95)
+
     def solve(self, why=""):
-        """Rebuild the lensing map, showing how far along it is."""
+        """Rebuild the lensing map, showing how far along it is.
+
+        plot1979 takes its map from the bank of inclinations when the bank has
+        the maps either side, which needs no solving at all and lets the view
+        move continuously afterwards. Otherwise it solves, and sets the bank
+        filling in the background for next time.
+        """
+        orders = (0,) if self.o.no_ghost else (0, 1)
+        if self.encoding == "plot1979":
+            from luminet import bank as bank_module, fast
+
+            s = self.settings
+            if self.bank.ready_for(s["incl"]):
+                self.mapping = self.bank.mapping(s["incl"], s["mass"], s.get("acc", 1.0))
+                self.solved_for = True
+                self.using_bank = True
+                self.goal = {k: s[k] for k in ("incl", "mass", "outer_edge")}
+                self.extent = self.framing(self.mapping)
+                self.rates = spin.true_rates(self.mapping["radii"], float(s["mass"]), self.speed)
+                self.projector = (fast.Projector(self.mapping, orders)
+                                  if fast.available and not self.o.no_compile else None)
+                self.resized = True
+                return
+            bank_module.start_building(s["incl"])
+        self.using_bank = False
         label = why or "solving the lensing map"
         width = max(20, min(48, self.cols - len(label) - 14)) if self.cols else 30
 
@@ -304,6 +358,106 @@ class Live:
                           if fast.available and not self.o.no_compile else None)
         sys.stdout.write("\r\033[2K")
         self.resized = True
+
+    def advance(self, now, dt):
+        """Ease the view towards its goal, and rebuild properly once it rests."""
+        if self.rebuilt is not None:
+            generation, result = self.rebuilt
+            self.rebuilt = None
+            self.rebuilding = None
+            if generation == self.generation:
+                self.adopt(result)
+        if not (self.encoding == "plot1979" and self.using_bank and self.goal):
+            return
+        s, g = self.settings, self.goal
+        ease = 1.0 - np.exp(-dt * 8.0)
+        changed = False
+        for key, close in (("incl", 5e-4), ("mass", 1e-3), ("outer_edge", 0.05)):
+            gap = g[key] - s[key]
+            if gap == 0:
+                continue
+            s[key] = g[key] if abs(gap) <= close else s[key] + gap * ease
+            changed = True
+        if changed:
+            mapping = self.bank.mapping(s["incl"], s["mass"], s.get("acc", 1.0))
+            if mapping is None:
+                s.update(g)
+                self.solve()
+                return
+            self.mapping = mapping
+            self.rates = spin.true_rates(mapping["radii"], float(s["mass"]), self.speed)
+            self.extent = self.framing(mapping)
+            if self.projector is None:
+                # Without the compiled path a moving frame would be too slow, so
+                # jump to the goal and rebuild there.
+                s.update(g)
+                self.mapping = self.bank.mapping(s["incl"], s["mass"], s.get("acc", 1.0))
+                self.extent = self.framing(self.mapping)
+                self.resized = True
+                return
+            self.projector.set_tables(mapping)
+            self.moving = True
+            self.generation += 1
+            self.rest_at = now + 0.25
+        elif self.moving and self.rebuilding is None and now >= self.rest_at:
+            self.start_rebuild()
+
+    def start_rebuild(self):
+        """Build the still view's field, lines and mask on a background thread."""
+        import threading
+
+        from luminet import fast
+
+        generation = self.generation
+        mapping, extent, rates = self.mapping, self.extent, np.array(self.rates)
+        orders = (0,) if self.o.no_ghost else (0, 1)
+        pixels_on = self.pixels_on and self.pixel_view is not None
+
+        def work():
+            try:
+                projector = fast.Projector(mapping, orders)
+                if pixels_on:
+                    from luminet import pixels
+
+                    view = pixels.PixelView(
+                        mapping, extent, rates, projector, orders, self.cols, self.rows,
+                        self.cell_px, pixels.Transport(self.transport_mode), seed=self.seed,
+                        infall=self.o.infall, gamma=self.o.ink_gamma,
+                        grain=getattr(self.o, "pixel_grain", 4), floor=self.dust)
+                    view.lineset = self.make_lineset(view.field, view.px_w, view.px_h, mapping)
+                    result = {"projector": projector, "view": view}
+                else:
+                    field = spin.DotField(mapping, self.dust_parcels, self.w, self.h, extent,
+                                          rates, orders, gamma=self.o.ink_gamma,
+                                          projector=projector, floor=self.dust,
+                                          cell_aspect=self.cell_aspect)
+                    result = {"projector": projector, "field": field,
+                              "lineset": self.make_lineset(field, self.w, self.h, mapping),
+                              "hole": self.shadow_coverage(field, mapping)}
+            except Exception as e:                     # never take the view down
+                result = {"error": e}
+            self.rebuilt = (generation, result)
+
+        self.rebuilding = threading.Thread(target=work, daemon=True)
+        self.rebuilding.start()
+
+    def adopt(self, result):
+        if "error" in result:
+            self.note = (f"rebuild failed: {result['error']}", time.monotonic() + 4)
+            self.moving = False
+            self.resized = True
+            return
+        self.projector = result["projector"]
+        if "view" in result:
+            if self.pixel_view is not None and self.pixel_view is not result["view"]:
+                self.pixel_view.transport.close()
+            self.pixel_view = result["view"]
+        else:
+            self.field = result["field"]
+            self.lineset = result["lineset"]
+            self.hole = result["hole"]
+            self.live = None
+        self.moving = False
 
     def rebuild_rates(self):
         self.rates = spin.true_rates(self.mapping["radii"],
@@ -378,6 +532,13 @@ class Live:
         vignette and scanlines. Those work on colours per cell, since each
         braille cell has one foreground and one background.
         """
+        if self.pixels_on and self.pixel_view is not None and self.moving \
+                and self.projector is not None:
+            return self.pixel_view.frame_moving(
+                self.clock, self.rates, self.mapping, self.extent,
+                PALETTE_CYCLE[self.palette_at], GLOW_CYCLE[self.glow_at], self.bloom,
+                self.mask_on, INK, PAPER, HOLE, dots_on=self.dots_on)
+
         if self.pixels_on and self.pixel_view is not None:
             view = self.pixel_view
             view.restyle(PALETTE_CYCLE[self.palette_at], GLOW_CYCLE[self.glow_at],
@@ -389,12 +550,25 @@ class Live:
                               lines=self.line_args() if self.families else None,
                               line_width=self.line_width)
 
+        source, hole = self.field, self.hole
+        if self.moving and self.projector is not None:
+            # The map is changing under the view: measure this moment only, and
+            # let the lines rest until it settles.
+            if self.live is None:
+                self.live = spin.LiveField(self.w, self.h, gamma=self.o.ink_gamma,
+                                           floor=self.dust, scale=self.field.scale,
+                                           cell_aspect=self.cell_aspect, stride=2)
+            self.live.floor = self.dust
+            source = self.live.measure(self.dust_parcels, self.clock, self.rates,
+                                       self.extent, self.projector)
+            hole = self.shadow_coverage(source, self.mapping)
+
         if self.dots_on:
-            lit = self.field.frame(self.clock, self.rates).copy()
+            lit = source.frame(self.clock, self.rates).copy()
         else:
             lit = np.zeros((self.h, self.w), dtype=bool)
         line_cells = None
-        if self.families:
+        if self.families and not self.moving:
             idx, rgb = self.lineset.draw(self.clock, self.rates, width=1, **self.line_args())
             lit.reshape(-1)[idx] = True
             rows_i, cols_i = np.divmod(idx, self.w)
@@ -409,7 +583,7 @@ class Live:
             return cells.braille(lit, INK, PAPER)
 
         rows, cols = self.rows, self.cols
-        bright = self.field.target[:rows * 4, :cols * 2].reshape(rows, 4, cols, 2).max(axis=(1, 3))
+        bright = source.target[:rows * 4, :cols * 2].reshape(rows, 4, cols, 2).max(axis=(1, 3))
         if name == "ink":
             colours = np.empty((rows, cols, 3), dtype=np.float32)
             colours[:] = INK
@@ -446,11 +620,11 @@ class Live:
                 reach = spill / max(float(spill.max()), 1e-6)
                 tint = cells._ramp(reach, cells.palette(glow_name)).astype(np.float32)
             backgrounds += tint * (0.6 * self.bloom * spill)[..., None]
-        if self.mask_on and getattr(self, "hole", None) is not None:
+        if self.mask_on and hole is not None:
             # The shadow takes no light from anywhere, so the glow stops at its
             # edge. Only the glow: gas on the near side of the disk passes in
             # front of the hole, and its dots stay.
-            cover = self.hole[..., None]
+            cover = hole[..., None]
             backgrounds = backgrounds * (1.0 - cover) + np.array(HOLE, np.float32) * cover
         if self.vignette_on:
             y = np.linspace(-1, 1, rows)[:, None]
@@ -465,14 +639,16 @@ class Live:
                              colours=np.clip(colours, 0, 255).astype(np.uint8),
                              backgrounds=np.clip(backgrounds, 0, 255).astype(np.uint8))
 
-    def make_lineset(self, field, width, height):
+    def make_lineset(self, field, width, height, mapping=None):
         from luminet import lines
+
+        mapping = mapping if mapping is not None else self.mapping
 
         o = self.o
         def numbers(text, default):
             return tuple(float(v) for v in text.split(",") if v.strip()) if text else default
         return lines.LineSet(
-            self.mapping, field, width, height, field.ext_x, field.ext_y,
+            mapping, field, width, height, field.ext_x, field.ext_y,
             radii=numbers(getattr(o, "iso_radii", ""), (6, 10, 15, 20)),
             ghost=numbers(getattr(o, "iso_ghost", ""), (6, 20, 50, 100)),
             redshifts=numbers(getattr(o, "redshift_levels", ""), lines.DEFAULT_REDSHIFTS),
@@ -491,7 +667,7 @@ class Live:
             self.pixel_view.transport.close()
             self.pixel_view = None
 
-    def shadow_coverage(self, sub=6):
+    def shadow_coverage(self, field, mapping, sub=6):
         """How much of each cell lies inside the black hole's shadow, 0 to 1.
 
         For a non-rotating black hole the shadow on the observer's screen is an
@@ -501,15 +677,15 @@ class Live:
         out as a stepped circle. Each cell is sampled at several points instead
         and gets a fraction, which blends the edge.
         """
-        radius = float(self.mapping["bh"].critical_b)
+        radius = float(mapping["bh"].critical_b)
         cols, rows = self.cols, self.rows
         # Sample points spread over each cell's 2x4 dots, in dot coordinates.
         fx = (np.arange(sub) + 0.5) / sub * 2.0
         fy = (np.arange(sub * 2) + 0.5) / (sub * 2) * 4.0
         dot_x = np.arange(cols)[:, None] * 2.0 + fx[None, :]
         dot_y = np.arange(rows)[:, None] * 4.0 + fy[None, :]
-        bx = (dot_x / (self.w - 1) * 2 - 1) * self.field.ext_x
-        by = (dot_y / (self.h - 1) * 2 - 1) * self.field.ext_y
+        bx = (dot_x / (self.w - 1) * 2 - 1) * field.ext_x
+        by = (dot_y / (self.h - 1) * 2 - 1) * field.ext_y
         inside = (by[:, None, :, None] ** 2 + bx[None, :, None, :] ** 2) < radius ** 2
         cover = inside.mean(axis=(2, 3)).astype(np.float32)
         # Gas on the near side of the disk passes in front of the hole, and the
@@ -518,7 +694,7 @@ class Live:
         # measured from samples and is ragged.
         from scipy.ndimage import gaussian_filter
 
-        front = (self.field.front > 0).astype(np.float32)
+        front = (field.front > 0).astype(np.float32)
         front = gaussian_filter(front, 1.0)[:rows * 4, :cols * 2]
         in_front = front.reshape(rows, 4, cols, 2).mean(axis=(1, 3))
         return cover * (1.0 - np.clip(in_front * 1.5, 0.0, 1.0))
@@ -580,6 +756,12 @@ class Live:
             return text
         if self.paused:
             bits.append("PAUSED")
+        if self.encoding == "plot1979":
+            if self.moving:
+                bits.append("moving")
+            done = self.bank.count()
+            if done < 31:
+                bits.append(f"bank {done}/31")
         shown = getattr(self, "shown", ())
         if len(shown) > 1:
             span = shown[-1] - shown[0]
@@ -685,6 +867,21 @@ class Live:
             self.cycling = not self.cycling
             self.next_change = 0.0
         # Everything below changes the gravity, so the map has to be solved again.
+        elif self.using_bank and key in ("[", "]", "-", "=", "z", "Z", ",", "."):
+            from luminet import bank as bank_module
+
+            g = self.goal
+            if key in ("[", "]"):
+                g["incl"] = float(np.clip(g["incl"] + o.incl_step * (1 if key == "]" else -1),
+                                          bank_module.INCLINATIONS[0],
+                                          bank_module.INCLINATIONS[-1]))
+            elif key in ("-", "=", "z", "Z"):
+                wider = key in ("=", "Z")
+                g["outer_edge"] = float(np.clip(g["outer_edge"] + o.edge_step * (1 if wider else -1),
+                                                8.0, 200.0))
+            else:
+                g["mass"] = float(np.clip(g["mass"] + o.mass_step * (1 if key == "." else -1),
+                                          0.25, 8.0))
         elif key in ("[", "]"):
             step = o.incl_step * (1 if key == "]" else -1)
             s["incl"] = float(np.clip(s["incl"] + step, 0.02, 1.5))
@@ -728,8 +925,11 @@ class Live:
             if not 0.25 <= nxt <= 1.5:
                 self.tilt_up = not getattr(self, "tilt_up", True)
                 nxt = s["incl"] - step
-            s["incl"] = float(np.clip(nxt, 0.25, 1.5))
-            self.solve(f"inclination {s['incl']:.2f}")
+            if self.using_bank and self.goal is not None:
+                self.goal["incl"] = float(np.clip(nxt, 0.25, 1.5))
+            else:
+                s["incl"] = float(np.clip(nxt, 0.25, 1.5))
+                self.solve(f"inclination {s['incl']:.2f}")
 
     # ------------------------------------------------------------------- loop
 
@@ -755,6 +955,8 @@ class Live:
                     self.clock += now - last
                 last = now
 
+                self.advance(now, now - getattr(self, "_last_advance", now))
+                self._last_advance = now
                 if self.cycling:
                     self.cycle()
                 if self.resized:

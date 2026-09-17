@@ -48,7 +48,7 @@ if available:
     # Deliberately not fastmath. That flag lets the compiler assume values are
     # never NaN or infinite and drop the checks for them, and the lensing map
     # uses NaN to mean "no light reaches here".
-    @nb.njit(cache=True)
+    @nb.njit(cache=True, nogil=True)
     def _project(ring, jitter, angle0, radii, rates, b_tab, z_tab, has, phase,
                  mass, acc, ext_x, ext_y, width, height, out_idx, out_flux, out_z):
         n = ring.shape[0]
@@ -105,7 +105,7 @@ if available:
                     out_z[i, o] = z
 
 
-    @nb.njit(cache=True)
+    @nb.njit(cache=True, nogil=True)
     def _place(ring, jitter, angle0, luck, radii, rates, b_tab, has, phase,
                ext_x, ext_y, width, height, chance, lit):
         """Move every parcel and light it or not; no brightness is computed.
@@ -148,7 +148,7 @@ if available:
                         lit[k] = True
 
 
-    @nb.njit(cache=True)
+    @nb.njit(cache=True, nogil=True)
     def _paint(ring, jitter, angle0, luck, radii, rates, b_tab, has, phase,
                ext_x, ext_y, grid_w, grid_h, chance, cell_rgb, img, dot):
         """Paint this frame's dots straight into an RGB image, at pixel resolution.
@@ -212,6 +212,18 @@ class Projector:
     """
 
     def __init__(self, mapping, orders):
+        self.orders = orders
+        self.set_tables(mapping)
+        self._idx = None
+        self._flux = None
+
+    def set_tables(self, mapping):
+        """Point the projector at another map with the same shape of tables.
+
+        While the view tilts or zooms, the map changes every frame; replacing
+        the tables in place keeps the output buffers and avoids rebuilding.
+        """
+        orders = self.orders
         tables = mapping["tables"]
         shape = next(iter(tables.values()))[0].shape
         self.b = np.full((2, *shape), np.nan)
@@ -224,8 +236,6 @@ class Projector:
         self.radii = np.ascontiguousarray(mapping["radii"], dtype=np.float64)
         self.mass = float(mapping["bh"].mass)
         self.acc = float(mapping["bh"].acc)
-        self._idx = None
-        self._flux = None
 
     def __call__(self, parcels, phase, rates, ext_x, ext_y, width, height):
         """Cell index, observed flux and lifetime chance of every lit sample."""

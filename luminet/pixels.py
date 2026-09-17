@@ -131,18 +131,14 @@ class PixelView:
         self.dot = 1 if scale == 2 else 2
 
         # Pixels are square, so the sample shape is too.
-        saved = spin.CELL_ASPECT
-        spin.CELL_ASPECT = 1.0
-        try:
-            self.parcels = spin.Parcels(mapping["radii"],
-                                        count=int(self.grid_w * self.grid_h * density),
-                                        seed=seed, infall=infall, clumps=0, spread="log")
-            self.field = spin.DotField(mapping, self.parcels, self.grid_w, self.grid_h,
-                                       extent, rates, orders, gamma=gamma,
-                                       projector=projector, floor=floor)
-            ext_x, ext_y = self.field.ext_x, self.field.ext_y
-        finally:
-            spin.CELL_ASPECT = saved
+        self.parcels = spin.Parcels(mapping["radii"],
+                                    count=int(self.grid_w * self.grid_h * density),
+                                    seed=seed, infall=infall, clumps=0, spread="log")
+        self.field = spin.DotField(mapping, self.parcels, self.grid_w, self.grid_h,
+                                   extent, rates, orders, gamma=gamma,
+                                   projector=projector, floor=floor, cell_aspect=1.0)
+        ext_x, ext_y = self.field.ext_x, self.field.ext_y
+        self.gamma, self.floor = gamma, floor
         self.ext_x, self.ext_y = ext_x, ext_y
         self.projector = projector
         self.mapping = mapping
@@ -239,6 +235,76 @@ class PixelView:
         if lines and self.lineset is not None:
             idx, rgb = self.lineset.draw(t, rates, width=line_width, **lines)
             img.reshape(-1, 3)[idx] = rgb
+        return self.transport.escape(img, self.cols, self.rows)
+
+    def frame_moving(self, t, rates, mapping, extent, palette, glow_palette, bloom, mask,
+                     ink, paper, hole, dots_on=True):
+        """A frame while the view tilts or zooms: measured now, drawn cheaply.
+
+        The still frame's glow, mask and dot colours are built once from a
+        time-averaged field. Here the map changes every frame, so those are made
+        again from this moment's measurement - the glow from the coarse grid,
+        stretched by repetition, and the mask only over the square it can
+        occupy - and lines rest until the view settles.
+        """
+        live = getattr(self, "_live", None)
+        if live is None:
+            live = spin.LiveField(self.grid_w, self.grid_h, gamma=self.gamma,
+                                  floor=self.floor, scale=self.field.scale, cell_aspect=1.0,
+                                  stride=3)
+            self._live = live
+        live.floor = self.floor
+        live.measure(self.parcels, t, rates, extent, self.projector)
+        target = live.target
+        grain = self.px_w // self.grid_w
+
+        if palette == "ink":
+            rgb = np.broadcast_to(np.array(ink, np.float32), (*target.shape, 3))
+            glow_tint = np.array(ink, np.float32)
+        else:
+            stops = cells.palette(palette)
+            tone = 0.4 + 0.6 * np.clip(target, 0.0, 1.0) ** 0.5
+            rgb = cells._ramp(tone, stops).astype(np.float32)
+            glow_tint = np.array(stops[len(stops) * 2 // 3], np.float32)
+        cell_rgb = np.clip(rgb.reshape(-1, 3), 0, 255).astype(np.uint8)
+
+        coarse = np.empty((self.grid_h, self.grid_w, 3), np.float32)
+        coarse[:] = paper
+        if bloom > 0:
+            from scipy.ndimage import gaussian_filter
+
+            spill = gaussian_filter(target.astype(np.float32), sigma=2.2)
+            if glow_palette == "match":
+                tint = glow_tint[None, None, :]
+            else:
+                reach = spill / max(float(spill.max()), 1e-6)
+                tint = cells._ramp(reach, cells.palette(glow_palette)).astype(np.float32)
+            coarse += tint * (0.6 * bloom * spill)[..., None]
+        img = np.repeat(np.repeat(np.clip(coarse, 0, 255).astype(np.uint8), grain, axis=0),
+                        grain, axis=1)
+
+        if mask:
+            radius = float(mapping["bh"].critical_b)
+            cx, cy = (self.px_w - 1) / 2.0, (self.px_h - 1) / 2.0
+            rx = radius / live.ext_x * (self.px_w - 1) / 2.0
+            ry = radius / live.ext_y * (self.px_h - 1) / 2.0
+            x0, x1 = int(max(0, cx - rx - 2)), int(min(self.px_w, cx + rx + 3))
+            y0, y1 = int(max(0, cy - ry - 2)), int(min(self.px_h, cy + ry + 3))
+            if x1 > x0 and y1 > y0:
+                yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+                r = min(rx, ry)
+                dist = np.hypot((xx - cx) / max(rx, 1e-6), (yy - cy) / max(ry, 1e-6)) * r
+                cover = np.clip(r - dist + 0.5, 0.0, 1.0)
+                front = (live.front > 0)
+                front = np.repeat(np.repeat(front, grain, axis=0), grain, axis=1)[y0:y1, x0:x1]
+                cover = (cover * (1.0 - front))[..., None]
+                patch = img[y0:y1, x0:x1].astype(np.float32)
+                img[y0:y1, x0:x1] = (patch * (1.0 - cover)
+                                     + np.array(hole, np.float32) * cover).astype(np.uint8)
+
+        if dots_on:
+            self.projector.paint(self.parcels, t, rates, live.ext_x, live.ext_y,
+                                 self.grid_w, self.grid_h, live.chance, cell_rgb, img, self.dot)
         return self.transport.escape(img, self.cols, self.rows)
 
     def _paint_numpy(self, img, t, rates):
