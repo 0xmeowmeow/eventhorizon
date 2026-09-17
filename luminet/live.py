@@ -39,10 +39,13 @@ ENCODING_CYCLE = ["half", "sextant", "braille", "plot1979"]
 INK = (238, 230, 210)
 PAPER = (14, 16, 13)     # the print is not quite black
 LINE = (150, 205, 235)   # isoradials drawn over the dots
+HOLE = (0, 0, 0)         # the shadow, darker than the paper
+GLOW_CYCLE = ["match"]   # the glow's own palette; "match" follows the dots
 OVERLAYS = ["off", "lines", "flowing"]
 
 PALETTE_CYCLE = ["ink", "ember", "inferno", "magma", "amber", "phosphor", "ice",
                  "plasma", "cividis", "bone", "copper", "gameboy", "bw"]
+GLOW_CYCLE += PALETTE_CYCLE
 
 HELP = [
     ("q  esc", "quit"),
@@ -63,10 +66,32 @@ HELP = [
     (",  .", "mass  (re-solves)"),
     ("e  E", "encoding: half, sextant, braille, 1979 plot"),
     ("i", "1979: isoradials off, drawn, flowing"),
+    ("k  K", "1979: glow palette, separate from the dots"),
+    ("m", "1979: keep the glow out of the shadow"),
     ("o", "1979: hide or show the dots"),
     ("y", "cycle everything, hands off"),
     ("h  ?", "this list"),
 ]
+
+
+def keys_in(text):
+    """The keypresses in a chunk of terminal input, with escape sequences removed.
+
+    Arrow and function keys arrive as ESC followed by [ or O, parameters, and a
+    final byte from @ to ~. Those are dropped whole. A lone ESC is kept, since
+    on its own it is the escape key.
+    """
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "\x1b" and i + 1 < len(text) and text[i + 1] in "[O":
+            j = i + 2
+            while j < len(text) and not ("@" <= text[j] <= "~"):
+                j += 1
+            i = j + 1
+            continue
+        yield ch
+        i += 1
 
 
 class Live:
@@ -86,6 +111,8 @@ class Live:
         self.encoding = opts.encoding
         self.overlay = 0
         self.dots_on = True
+        self.glow_at = 0
+        self.mask_on = True
         self.note = ("", 0.0)
         self.cycling = opts.cycle
         self.next_change = 0.0
@@ -144,6 +171,7 @@ class Live:
                                        projector=self.projector)
             self.isolines = spin.Isolines(self.mapping, self.w, self.h,
                                           self.field.ext_x, self.field.ext_y)
+            self.hole = self.shadow_coverage()
         self.resized = False
         # A new grid or a new map makes the old timings about something else,
         # and a re-solve pause would drag the rate down for a second.
@@ -289,7 +317,8 @@ class Live:
                 self.rows, 4, self.cols, 2).any(axis=(1, 3))
 
         name = PALETTE_CYCLE[self.palette_at]
-        effects = self.bloom > 0 or self.scanlines_on or self.vignette_on
+        effects = (self.bloom > 0 or self.scanlines_on or self.vignette_on
+                   or (self.mask_on and HOLE != PAPER))
         if name == "ink" and line_cells is None and not effects:
             return cells.braille(lit, INK, PAPER)
 
@@ -319,7 +348,23 @@ class Live:
             from scipy.ndimage import gaussian_filter
 
             spill = gaussian_filter(bright.astype(np.float32), sigma=(1.2, 2.4))
-            backgrounds += glow_colour[None, None, :] * (0.6 * self.bloom * spill)[..., None]
+            glow_name = GLOW_CYCLE[self.glow_at]
+            if glow_name == "match":
+                tint = np.broadcast_to(glow_colour, (rows, cols, 3))
+            else:
+                # Its own palette, ramped by how much light arrives: faint spill
+                # takes the dark end, the glow nearest the lobe the bright end.
+                # That gives the glow a colour gradient of its own, independent
+                # of the dots, so the two can contrast.
+                reach = spill / max(float(spill.max()), 1e-6)
+                tint = cells._ramp(reach, cells.palette(glow_name)).astype(np.float32)
+            backgrounds += tint * (0.6 * self.bloom * spill)[..., None]
+        if self.mask_on and getattr(self, "hole", None) is not None:
+            # The shadow takes no light from anywhere, so the glow stops at its
+            # edge. Only the glow: gas on the near side of the disk passes in
+            # front of the hole, and its dots stay.
+            cover = self.hole[..., None]
+            backgrounds = backgrounds * (1.0 - cover) + np.array(HOLE, np.float32) * cover
         if self.vignette_on:
             y = np.linspace(-1, 1, rows)[:, None]
             x = np.linspace(-1, 1, cols)[None, :]
@@ -332,6 +377,28 @@ class Live:
         return cells.braille(lit, INK, PAPER,
                              colours=np.clip(colours, 0, 255).astype(np.uint8),
                              backgrounds=np.clip(backgrounds, 0, 255).astype(np.uint8))
+
+    def shadow_coverage(self, sub=6):
+        """How much of each cell lies inside the black hole's shadow, 0 to 1.
+
+        For a non-rotating black hole the shadow on the observer's screen is an
+        exact circle, radius 3 sqrt(3) M, whatever the inclination - so a round
+        mask is also the physically right one. Backgrounds are coloured a whole
+        cell at a time, and a cell is 10 by 22 pixels, so a hard mask would come
+        out as a stepped circle. Each cell is sampled at several points instead
+        and gets a fraction, which blends the edge.
+        """
+        radius = float(self.mapping["bh"].critical_b)
+        cols, rows = self.cols, self.rows
+        # Sample points spread over each cell's 2x4 dots, in dot coordinates.
+        fx = (np.arange(sub) + 0.5) / sub * 2.0
+        fy = (np.arange(sub * 2) + 0.5) / (sub * 2) * 4.0
+        dot_x = np.arange(cols)[:, None] * 2.0 + fx[None, :]
+        dot_y = np.arange(rows)[:, None] * 4.0 + fy[None, :]
+        bx = (dot_x / (self.w - 1) * 2 - 1) * self.field.ext_x
+        by = (dot_y / (self.h - 1) * 2 - 1) * self.field.ext_y
+        inside = (by[:, None, :, None] ** 2 + bx[None, :, None, :] ** 2) < radius ** 2
+        return inside.mean(axis=(2, 3)).astype(np.float32)
 
     def cell_colours(self, value, mask, star_dots):
         """A palette colour for each cell, from the light that falls in it.
@@ -375,6 +442,10 @@ class Live:
                 bits.append(f"isoradials {OVERLAYS[self.overlay]}")
             if not self.dots_on:
                 bits.append("dots hidden")
+            if self.bloom > 0:
+                bits.append(f"glow {GLOW_CYCLE[self.glow_at]} {self.bloom:.2f}")
+            if not self.mask_on:
+                bits.append("mask off")
         text, until = getattr(self, "note", ("", 0.0))
         if text and time.monotonic() < until:
             return text
@@ -402,8 +473,8 @@ class Live:
             self.note = (f"{what} is for half, sextant and braille; plot1979 has none",
                          time.monotonic() + 3.0)
             return True
-        if self.encoding != "plot1979" and key in ("i", "o"):
-            self.note = ("isoradials and hiding dots are plot1979 only",
+        if self.encoding != "plot1979" and key in ("i", "o", "k", "K", "m"):
+            self.note = ("isoradials, hiding dots, glow palette and mask are plot1979 only",
                          time.monotonic() + 3.0)
             return True
         elif key == " ":
@@ -450,6 +521,10 @@ class Live:
             self.overlay = (self.overlay + 1) % len(OVERLAYS)
         elif key == "o":
             self.dots_on = not self.dots_on
+        elif key in ("k", "K"):
+            self.glow_at = (self.glow_at + (1 if key == "k" else -1)) % len(GLOW_CYCLE)
+        elif key == "m":
+            self.mask_on = not self.mask_on
         elif key == "y":
             self.cycling = not self.cycling
             self.next_change = 0.0
@@ -571,13 +646,25 @@ class Live:
         return 0
 
     def pump(self):
-        """Read whatever has been typed, without waiting for it."""
-        while select.select([sys.stdin], [], [], 0)[0]:
-            ch = sys.stdin.read(1)
-            if not ch:
+        """Handle everything that has been typed, without waiting for more.
+
+        Reading through sys.stdin one character at a time lost keys: Python
+        buffers the stream, so when two keys arrived together the second sat in
+        that buffer, invisible to select(), until something else was pressed.
+        Reading the descriptor directly takes all of it at once.
+
+        Escape sequences are skipped whole. An arrow key arrives as ESC [ A,
+        and handing that over a character at a time made the ESC read as quit.
+        A lone ESC, with nothing following it, still quits.
+        """
+        fd = sys.stdin.fileno()
+        while select.select([fd], [], [], 0)[0]:
+            data = os.read(fd, 4096)
+            if not data:
                 return False
-            if not self.handle(ch):
-                return False
+            for ch in keys_in(data.decode("utf-8", errors="ignore")):
+                if not self.handle(ch):
+                    return False
         return True
 
 
