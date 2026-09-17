@@ -54,11 +54,10 @@ screen.
   steps are in packaging/README.md. AUR registration was closed on
   2026-09-18 (a wave of automated sign-ups); wait for aur-general or the Arch
   news feed rather than retrying.
-- **meow-meow.io.** The page is written at meow-meow.io/eventhorizon/ with
-  recordings, not deployed and not committed there (25 MB of video). The tile
-  and updates entry wait in site/ until another session finishes editing
-  index.html and data/updates.json. A header generator for field.js is
-  possible from tools/web_export.py; also waiting.
+- **meow-meow.io.** Live at https://meow-meow.io/eventhorizon/ since
+  2026-09-18 (site commit 945d327), with a works card and an updates entry.
+  A header generator for field.js is still possible from
+  tools/web_export.py; not started.
 - The grey band just outside the shadow in pixel mode predates this work.
 - Ghostty glow shader, octants, smooth infall: parked.
 
