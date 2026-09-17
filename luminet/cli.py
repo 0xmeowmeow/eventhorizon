@@ -1051,7 +1051,7 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="luminet",
         description="A black hole for the terminal, after Luminet's 1979 plot, and the "
-                    "simulation behind it. `luminet spin` runs the live widget; with no "
+                    "simulation behind it. `eventhorizon` (or `luminet spin`) runs the live widget; with no "
                     "arguments, an interactive menu.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -1156,9 +1156,10 @@ def build_parser():
     p.set_defaults(func=cmd_term)
 
     p = sub.add_parser(
-        "spin", help="the live black hole widget for the terminal", usage="luminet spin [options]",
+        "spin", help="the live black hole widget for the terminal (also: eventhorizon, eh)",
+        usage="eventhorizon [options]   (or: luminet spin [options])",
         description="The live widget: Luminet's 1979 plot of a black hole, turning in real "
-                    "time. Opens with a preset from ~/.config/luminet; press h while it runs "
+                    "time. Opens with a preset from ~/.config/eventhorizon; press h while it runs "
                     "for keys. Options typed here win over the preset.")
     p.add_argument("--channel", default="flux",
                    choices=["flux", "both", "redshift"], help="what the colour means")
@@ -1207,6 +1208,8 @@ def build_parser():
                         "Defaults to the config file's start setting")
     p.add_argument("--status", action="store_true", help="show the status line from the start")
     p.add_argument("--hud", action="store_true", help="plot1979: start with the observatory HUD")
+    p.add_argument("--invert", action="store_true",
+                   help="plot1979: start inverted, a white hole; I toggles it")
     p.add_argument("--no-events", action="store_true",
                    help="plot1979: no probes or transmissions on their own")
     p.add_argument("--lines", default="",
@@ -1273,7 +1276,8 @@ def build_parser():
                    help="below 1 lifts the faint disk, above 1 deepens the blacks")
     p.set_defaults(func=cmd_spin)
     group_options(p, [
-        ("the widget", ["preset", "pixels", "no_pixels", "status", "hud", "no_events", "fps",
+        ("the widget", ["preset", "pixels", "no_pixels", "status", "hud", "invert", "no_events",
+                        "fps",
                         "palette", "bloom", "speed", "dust"]),
         ("the view", ["incl", "mass", "acc", "outer_edge", "run", "width", "height",
                       "incl_step", "edge_step", "mass_step", "cycle", "cycle_every", "seed"]),
@@ -1303,6 +1307,17 @@ def build_parser():
     p.add_argument("--dpi", type=int, default=110)
     p.set_defaults(func=cmd_draw)
     return parser
+
+
+def widget(argv=None):
+    """eventhorizon and eh: the widget on its own, without a subcommand."""
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in ("--version", "-V"):
+        from luminet import __version__
+
+        print(f"eventhorizon {__version__}")
+        return 0
+    return main(["spin", *argv])
 
 
 def main(argv=None):

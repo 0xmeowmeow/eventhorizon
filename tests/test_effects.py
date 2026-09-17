@@ -75,16 +75,50 @@ def test_a_transmission_arrives_in_full(mapping):
     assert "abc" in fx.readout[0]
 
 
-def test_the_warp_comes_back(mapping):
-    w = effects.Warp()
+def run_warp(fx, live, seconds, t0=0.0):
     zooms, directions = [], []
-    while not w.done:
-        zooms.append(w.zoom())
-        directions.append(w.direction())
-        w.age += 1 / 30
-    assert zooms[0] == 1.0 and min(zooms) == pytest.approx(0.38, abs=0.01)
-    assert w.zoom() == 1.0 and w.direction() == 1.0 and not w.inverted()
-    assert -1.0 in directions
+    for i in range(int(seconds * 30)):
+        fx.step(live, t0 + i / 30, 1 / 30)
+        zooms.append(fx.zoom())
+        directions.append(fx.time_direction())
+    return zooms, directions
+
+
+def test_the_warp_stays_out_until_sent_back(mapping):
+    live = fake_live(mapping)
+    fx = effects.Effects(seed=1, events=False)
+    assert fx.launch_warp(live)
+    assert not fx.launch_warp(live)                 # not mid-passage
+    zooms, directions = run_warp(fx, live, 30.0)
+    assert min(zooms) == pytest.approx(0.38, abs=0.01)
+    assert fx.warped() and fx.zoom() == 1.0 and fx.warp.inverted()
+    assert directions[-1] == -1.0
+    assert fx.launch_warp(live)                     # back
+    zooms, directions = run_warp(fx, live, 5.0)
+    assert fx.warp is None and fx.zoom() == 1.0 and fx.time_direction() == 1.0
+    assert min(zooms) == pytest.approx(0.38, abs=0.01)
+
+
+def test_an_automatic_warp_comes_back_on_its_own(mapping):
+    live = fake_live(mapping)
+    fx = effects.Effects(seed=1, events=False)
+    fx.launch_warp(live, hold=2.0)
+    run_warp(fx, live, 12.0)
+    assert fx.warp is None
+
+
+def test_invert_flips_the_picture_and_the_warp_flips_it_back(mapping):
+    live = fake_live(mapping)
+    fx = effects.Effects(seed=1, events=False)
+    fx.invert = True
+    img = np.full((40, 80, 3), 10, np.uint8)
+    fx.paint(effects.PixelCanvas(img, 40.0, 20.0, 40, 10), live)
+    assert img[0, 0, 0] == 245
+    fx.launch_warp(live)
+    run_warp(fx, live, 6.0)
+    img = np.full((40, 80, 3), 10, np.uint8)
+    fx.paint(effects.PixelCanvas(img, 40.0, 20.0, 40, 10), live)
+    assert img[0, 0, 0] == 10                       # inverted twice
 
 
 def test_pixel_plot_blends_and_clips():

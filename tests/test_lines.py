@@ -65,11 +65,29 @@ def test_pulse_changes_brightness_not_shape(lineset):
     assert not np.array_equal(a_rgb, b_rgb)
 
 
-def test_sweep_moves_a_line_over_dimmed_ones(lineset):
+def test_sweep_moves_a_line_and_leaves_nothing_behind(lineset):
     ls, rates = lineset
-    a_idx, _ = ls.draw(0.0, rates, {"radii"}, style="sweep")
+    solid, _ = ls.draw(2.0, rates, {"radii"}, style="solid")
+    a_idx, a_rgb = ls.draw(2.0, rates, {"radii"}, style="sweep")
     b_idx, _ = ls.draw(4.0, rates, {"radii"}, style="sweep")
     assert set(a_idx.tolist()) != set(b_idx.tolist())
+    assert 0 < len(a_idx) < len(solid) / 2
+    assert a_rgb.max(axis=1).min() > 0          # no black pixels from a faded line
+
+
+def test_sweeps_only_ever_move_one_way():
+    from luminet.lines import LineSet
+
+    seen = []
+    for t in np.arange(0.0, 40.0, 0.05):
+        sweeps = LineSet._sweeps(t, 8.0)
+        assert 1 <= len(sweeps) <= 2
+        seen.append(sweeps)
+    # Following the newest sweep, progress only rises, then a new one starts low
+    # while the old one is still visible.
+    for before, after in zip(seen, seen[1:]):
+        if len(after) == 2 and len(before) == 1:
+            assert after[1][0] < 0.05 and after[0][0] > before[0][0]
 
 
 def test_width_thickens_without_duplicates(lineset):

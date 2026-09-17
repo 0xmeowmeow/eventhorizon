@@ -35,7 +35,9 @@ ANGLES = 180
 
 def cache_dir():
     base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return base / "luminet" / f"maps-v{VERSION}-r{RINGS}-a{ANGLES}-o{OUTER:.0f}"
+    from luminet.config import APP
+
+    return base / APP / f"maps-v{VERSION}-r{RINGS}-a{ANGLES}-o{OUTER:.0f}"
 
 
 def path_for(incl):

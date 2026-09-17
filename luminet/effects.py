@@ -18,8 +18,9 @@ transmission  A message, one cuneiform sign per byte, spiralling inward with
 hud           Readouts in seven-segment digits, a reticle locked to one parcel
               of gas with its redshift factor, a dotted photon ring and a sweep.
 warp          The view falls towards the hole with streaks, flashes white, and
-              comes out of an inverted "white hole" with the gas running
-              backwards. That part is pure fiction.
+              comes out in an inverted "white hole" with the gas running
+              backwards, and stays there until sent back the same way. That
+              part is pure fiction.
 
 Everything is drawn through a canvas, so one description serves both the
 pixel picture and the braille one. Glyphs - signs, digits, reticle corners -
@@ -356,11 +357,22 @@ class Transmission:
 # ----------------------------------------------------------------------- warp
 
 class Warp:
-    SPOOL, FLASH, WHITE, BACK, END = 2.2, 2.5, 6.0, 6.25, 6.25
+    """One leg of a warp jump: out into the white hole, or back from it.
 
-    def __init__(self):
+    Out, the view falls towards the hole with streaks, flashes, and comes out
+    inverted with time running backwards, and stays there. Back is the same
+    passage the other way. `hold`, if set, sends it back on its own after that
+    many seconds, which is how an automatic event avoids stranding the view.
+    """
+
+    SPOOL, FLASH, EMERGE = 2.2, 2.5, 4.0
+    CROSS = 2.35                     # the moment of the flash
+
+    def __init__(self, back=False, hold=None):
         self.age = 0.0
         self.points = None
+        self.back = back
+        self.hold = hold
 
     def zoom(self):
         t = self.age
@@ -368,30 +380,37 @@ class Warp:
             return 1.0 - 0.62 * (t / self.SPOOL) ** 2.2
         if t < self.FLASH:
             return 0.38
-        if t < self.WHITE:
-            s = (t - self.FLASH) / (self.WHITE - self.FLASH)
+        if t < self.EMERGE:
+            s = (t - self.FLASH) / (self.EMERGE - self.FLASH)
             return 0.38 + 0.62 * (1 - (1 - s) ** 3)
         return 1.0
 
     def inverted(self):
-        return self.FLASH - 0.15 <= self.age < self.WHITE + 0.1
+        return (self.age >= self.CROSS) != self.back
 
     def flash(self):
         t = self.age
         if self.SPOOL <= t < self.FLASH:
-            return 1.0 - abs(t - 2.35) / 0.15
-        if self.WHITE <= t < self.BACK:
-            return 0.8 * (1.0 - abs(t - 6.1) / 0.15)
+            return max(0.0, 1.0 - abs(t - self.CROSS) / 0.15)
         if t < self.SPOOL:
             return 0.25 * (t / self.SPOOL) ** 3
         return 0.0
 
     def direction(self):
-        return -1.0 if 2.35 <= self.age < 6.1 else 1.0
+        return -1.0 if self.inverted() else 1.0
+
+    @property
+    def settled(self):
+        return self.age >= self.EMERGE
+
+    @property
+    def held(self):
+        """Through and out the other side, waiting to be sent back."""
+        return self.settled and not self.back
 
     @property
     def done(self):
-        return self.age >= self.END
+        return self.settled and self.back
 
 
 # -------------------------------------------------------------------- manager
@@ -401,6 +420,7 @@ class Effects:
         self.rng = np.random.default_rng(seed + 991)
         self.messages = list(messages) if messages else list(MESSAGES)
         self.hud = False
+        self.invert = False             # the picture inverted: a white hole, as a look
         self.probe = None
         self.transmission = None
         self.warp = None
@@ -415,7 +435,7 @@ class Effects:
     # ---------------------------------------------------------------- control
 
     def active(self):
-        return bool(self.hud or self.probe or self.transmission or self.warp)
+        return bool(self.hud or self.invert or self.probe or self.transmission or self.warp)
 
     def launch_probe(self, live):
         self.probe = Probe(live.mapping, framed_radius(live), self.rng)
@@ -424,8 +444,18 @@ class Effects:
         text = self.messages[int(self.rng.integers(len(self.messages)))]
         self.transmission = Transmission(text, live.mapping, framed_radius(live), self.rng)
 
-    def launch_warp(self, live):
-        self.warp = Warp()
+    def launch_warp(self, live, hold=None):
+        """Warp out, or back if already out. False while one is under way."""
+        if self.warp is None:
+            self.warp = Warp(hold=hold)
+        elif self.warp.held:
+            self.warp = Warp(back=True)
+        else:
+            return False
+        return True
+
+    def warped(self):
+        return self.warp is not None and self.warp.held
 
     def zoom(self):
         return self.warp.zoom() if self.warp else 1.0
@@ -438,14 +468,15 @@ class Effects:
         if self.events:
             if self.next_event is None:
                 self.next_event = now + 60 * float(self.rng.uniform(*self.event_minutes))
-            elif now >= self.next_event and not (self.probe or self.transmission or self.warp):
+            elif now >= self.next_event and not (self.probe or self.transmission
+                                                   or (self.warp and not self.warp.held)):
                 roll = self.rng.random()
                 if roll < 0.45:
                     self.launch_probe(live)
                 elif roll < 0.9:
                     self.launch_transmission(live)
-                elif live.projector is not None:
-                    self.launch_warp(live)
+                elif live.projector is not None and self.warp is None:
+                    self.launch_warp(live, hold=30.0)
                 self.next_event = now + 60 * float(self.rng.uniform(*self.event_minutes))
         if live.paused:
             dt = 0.0
@@ -477,23 +508,33 @@ class Effects:
                 self.transmission = None
 
         if self.warp is not None:
-            self.warp.age += dt
-            if self.warp.done:
+            w = self.warp
+            w.age += dt
+            if w.done:
                 self.warp = None
+            elif w.held and w.hold is not None and w.age - w.EMERGE > w.hold:
+                self.warp = Warp(back=True)
 
     # --------------------------------------------------------------- painting
 
     def paint(self, canvas, live):
         """Draw this frame's marks into the picture, before it is sent."""
         self.canvas = canvas
+        w = self.warp
+        if w is not None and w.points is None:
+            # Streak from where the light is, found before any inversion.
+            w.points = canvas.sample(320, self.rng)
+        flipped = self.invert != (w is not None and w.inverted())
+        if flipped:
+            canvas.invert()
         if self.hud:
             self._paint_hud(canvas, live)
         if self.probe is not None:
             self._paint_probe(canvas, live)
         if self.transmission is not None:
             self._paint_swallow(canvas, live)
-        if self.warp is not None:
-            self._paint_warp(canvas)
+        if w is not None:
+            self._paint_warp(canvas, flipped)
 
     def _paint_hud(self, canvas, live):
         crit = float(live.mapping["bh"].critical_b)
@@ -565,16 +606,14 @@ class Effects:
             xf, yf = to_screen(canvas, crit * 1.01, arc)
             canvas.plot(xf, yf, (255, 250, 235), (1 - s) * 0.9, size=max(1, canvas.unit // 2))
 
-    def _paint_warp(self, canvas):
+    def _paint_warp(self, canvas, flipped):
         w = self.warp
-        if w.points is None:
-            w.points = canvas.sample(320, self.rng)
         px, py = w.points
         z = w.zoom()
         if w.age < w.SPOOL:
             tail = min(1.0, z * 1.7)
             strength = (w.age / w.SPOOL) ** 1.5
-        elif w.FLASH <= w.age < w.WHITE:
+        elif w.FLASH <= w.age < w.EMERGE:
             tail = z * 0.72
             strength = max(0.0, 1.0 - (w.age - w.FLASH) / 1.4)
         else:
@@ -588,9 +627,8 @@ class Effects:
             xs = (tail_x + (head_x - tail_x) * t).ravel()
             ys = (tail_y + (head_y - tail_y) * t).ravel()
             alpha = np.broadcast_to(np.minimum(1.0, 1.6 * t * strength), (px.size, t.size)).ravel()
-            canvas.plot(xs, ys, (225, 235, 255), alpha, size=max(1, canvas.unit // 3))
-        if w.inverted():
-            canvas.invert()
+            streak = (30, 20, 0) if flipped else (225, 235, 255)
+            canvas.plot(xs, ys, streak, alpha, size=max(1, canvas.unit // 3))
         canvas.wash((255, 255, 255), w.flash())
 
     # ---------------------------------------------------------------- overlay

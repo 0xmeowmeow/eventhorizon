@@ -19,9 +19,11 @@ the dot palette, or one hue per line, and drawn in one of five styles:
     dotted      a fixed dotted line
     pulse       a wave of brightness passing from line to line, outermost first,
                 so for isoradials it travels inwards
-    sweep       one line moving continuously through the range - an isoradial
-                falling from the outer edge to the inner, or a redshift or
-                brightness level drifting across the disk - over the rest dimmed
+    sweep       one line moving through the range, always the same way - an
+                isoradial falling from the outer edge to the inner, or a redshift
+                or brightness level crossing the disk - with the next one
+                setting off before the last fades, so it turns rather than
+                bouncing back
 """
 
 import numpy as np
@@ -226,12 +228,8 @@ class LineSet:
             level = 0.18 + 0.82 * (0.5 + 0.5 * np.cos(2 * np.pi * phase)) ** 3
             return idx, np.clip(base * level[owner][:, None], 0, 255).astype(np.uint8)
 
-        # sweep: the fixed lines dimmed, one moving line per family bright on top
-        still_idx = idx
-        still_rgb = np.clip(base * 0.22, 0, 255).astype(np.uint8)
-        moving_idx, moving_rgb = self._sweep_only(t, families, colour, palette, width)
-        return (np.concatenate([still_idx, moving_idx]),
-                np.concatenate([still_rgb, moving_rgb]))
+        # sweep: only the moving lines, with nothing left behind them
+        return self._sweep_only(t, families, colour, palette, width)
 
     def _geometry(self, families, style, colour, palette, width):
         key = (frozenset(families), style, colour, tuple(map(tuple, palette)), width)
@@ -306,8 +304,16 @@ class LineSet:
                 parts.extend(self._sweep_contour(family, t, colour, palette))
         if not parts:
             return np.zeros(0, np.int64), np.zeros((0, 3), np.uint8)
+        parts = [part for part in parts if part[2] > 0.01]
+        if not parts:
+            return np.zeros(0, np.int64), np.zeros((0, 3), np.uint8)
         idx = np.concatenate([p[0] for p in parts])
         rgb = np.concatenate([p[1] * p[2] for p in parts])
+        # Where an old line and a new one cross, the brighter keeps the pixel.
+        order = np.argsort(-rgb.sum(axis=1), kind="stable")
+        idx, rgb = idx[order], rgb[order]
+        first = np.unique(idx, return_index=True)[1]
+        idx, rgb = idx[first], rgb[first]
         if width > 1:
             idx, owner = self._thicken_owned(idx, width)
             rgb = rgb[owner]
@@ -346,32 +352,56 @@ class LineSet:
             return np.broadcast_to(rgb, (count, 3)).astype(np.float32)
         return np.broadcast_to(BLUE, (count, 3)).astype(np.float32)
 
-    def _sweep_ring(self, t, colour, palette, period=8.0):
-        """An isoradial falling from the outer to the inner radius, then again."""
-        lo, hi = self.direct_span
-        u = (t % period) / period
-        radius = float(np.exp(np.log(hi) + u * (np.log(lo) - np.log(hi))))
+    SWEEP_OVERLAP = 0.18     # the share of a sweep the next one overlaps
+
+    @classmethod
+    def _sweeps(cls, t, period):
+        """The sweeps under way at time t, as (progress 0..1, brightness).
+
+        A sweep sets off every (1 - overlap) periods and takes a whole period,
+        so the next is already moving in as the last fades out at its end. The
+        motion only ever runs one way, like something turning.
+        """
+        gap = period * (1.0 - cls.SWEEP_OVERLAP)
+        n = int(np.floor(t / gap))
         out = []
-        for order in (0, 1):
-            line = self._ring_line(order, radius)
-            if line is None:
+        for k in (n - 1, n):
+            u = (t - k * gap) / period
+            if not 0.0 <= u < 1.0:
                 continue
-            out.append((line["idx"], self._colours(colour, line["z"], line["flux"],
-                                                   int(u * 10), 10, palette), 1.0))
+            fade_in = min(1.0, u / 0.06)
+            fade_out = min(1.0, (1.0 - u) / cls.SWEEP_OVERLAP)
+            out.append((u, fade_in * fade_out))
+        return out
+
+    def _sweep_ring(self, t, colour, palette, period=8.0):
+        """Isoradials falling from the outer radius to the inner, one after another."""
+        lo, hi = self.direct_span
+        out = []
+        for u, level in self._sweeps(t, period):
+            radius = float(np.exp(np.log(hi) + u * (np.log(lo) - np.log(hi))))
+            for order in (0, 1):
+                line = self._ring_line(order, radius)
+                if line is None:
+                    continue
+                out.append((line["idx"], self._colours(colour, line["z"], line["flux"],
+                                                       int(u * 10), 10, palette), level))
         return out
 
     def _sweep_contour(self, family, t, colour, palette, period=8.0):
-        """One level drifting through the family's range, back and forth."""
+        """Levels crossing the family's range, lowest to highest, one after another."""
         levels = self.redshift_levels if family == "redshift" else self.flux_levels
         if len(levels) < 2:
             return []
-        u = 0.5 - 0.5 * np.cos(2 * np.pi * (t % period) / period)
-        value = levels[0] + u * (levels[-1] - levels[0])
         field = self.z_map if family == "redshift" else self.flux_map
-        idx = _crossings(field, value)
-        z = np.full(len(idx), value if family == "redshift" else 1.0)
-        f = np.full(len(idx), value if family == "flux" else -1.0)
-        return [(idx, self._colours(colour, z, f, int(u * 10), 10, palette), 1.0)]
+        out = []
+        for u, level in self._sweeps(t, period):
+            value = levels[0] + u * (levels[-1] - levels[0])
+            idx = _crossings(field, value)
+            z = np.full(len(idx), value if family == "redshift" else 1.0)
+            f = np.full(len(idx), value if family == "flux" else -1.0)
+            out.append((idx, self._colours(colour, z, f, int(u * 10), 10, palette), level))
+        return out
 
     def _thicken_owned(self, idx, width):
         """Widen lines, returning each painted pixel and the sample it belongs to."""

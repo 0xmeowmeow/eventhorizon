@@ -13,7 +13,7 @@ def private_config(tmp_path, monkeypatch):
 
 def test_config_is_written_once_and_then_left_alone():
     cfg, problem = config.load_config()
-    assert problem is None and cfg["start"] == "random" and cfg["unfocused_fps"] == 5
+    assert problem is None and cfg["start"] == "random" and cfg["unfocused_fps"] == 20
     path = config.config_dir() / "config.toml"
     path.write_text("# mine\nfps = 12\n")
     cfg, _ = config.load_config()

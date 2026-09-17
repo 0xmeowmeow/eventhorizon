@@ -81,12 +81,14 @@ HELP = [
     ("o", "1979: hide or show the dots"),
     ("y", "cycle everything, hands off"),
     ("1-9  0", "presets: pick one, or 0 for a random one"),
+    ("<  >", "previous / next preset"),
     ("+", "save the current look as a preset"),
     ("X X", "delete the current preset (kept in deleted-presets.toml)"),
     ("!", "1979: drop a probe in"),
     ("@", "1979: receive a transmission"),
     ("#", "1979: observatory HUD"),
-    ("$", "1979: warp jump"),
+    ("$", "1979: warp out to the white hole, and $ again to come back"),
+    ("I", "1979: invert: a white hole as a look"),
     ("A", "1979: events on their own every few minutes"),
     ("tab", "status line"),
     ("h  ?", "this list"),
@@ -209,7 +211,7 @@ class Live:
         cfg = getattr(opts, "config", None) or {}
         self.status_on = bool(getattr(opts, "status", False))
         self.pixels_auto = getattr(opts, "pixels_mode", "off") == "auto"
-        self.unfocused_fps = float(cfg.get("unfocused_fps", 5))
+        self.unfocused_fps = float(cfg.get("unfocused_fps", 20))
         self.focused = True
         minutes = cfg.get("event_minutes", [4, 10])
         self.effects = effects.Effects(
@@ -217,6 +219,7 @@ class Live:
             events=bool(getattr(opts, "events", True)),
             event_minutes=(float(minutes[0]), float(minutes[-1])))
         self.effects.hud = bool(getattr(opts, "hud", False))
+        self.effects.invert = bool(getattr(opts, "invert", False))
         self.presets = list(getattr(opts, "presets", None) or [])
         self.preset_at = None
         self.pending_delete = None
@@ -237,7 +240,7 @@ class Live:
                     "dust": "dust", "lines": "lines", "line_style": "line_style",
                     "line_colour": "line_colour", "line_width": "line_width",
                     "vignette": "vignette", "scanlines": "scanlines", "incl": "incl",
-                    "mass": "mass", "disk": "outer_edge", "hud": "hud"}
+                    "mass": "mass", "disk": "outer_edge", "hud": "hud", "invert": "invert"}
 
     def current_look(self):
         s = self.settings
@@ -252,7 +255,7 @@ class Live:
             "line_colour": LINE_COLOURS[self.line_colour], "line_width": int(self.line_width),
             "dots": bool(self.dots_on), "mask": bool(self.mask_on),
             "vignette": bool(self.vignette_on), "scanlines": bool(self.scanlines_on),
-            "hud": bool(self.effects.hud),
+            "hud": bool(self.effects.hud), "invert": bool(self.effects.invert),
         }
 
     def apply_look(self, look, startup=False, keep=()):
@@ -289,6 +292,10 @@ class Live:
                 setattr(self, attr, bool(look[key]))
         if has("hud"):
             self.effects.hud = bool(look["hud"])
+        if has("invert") or ("invert" not in skip and not startup):
+            # A preset without the field is not inverted, so switching to one
+            # never leaves the picture flipped from the last.
+            self.effects.invert = bool(look.get("invert", False))
         if has("dust"):
             self.set_dust(float(look["dust"]), quiet=True)
         if has("speed"):
@@ -1045,15 +1052,23 @@ class Live:
             else:
                 self.note = (f"only {len(self.presets)} presets", now + 2.5)
             return True
+        if key in ("<", ">"):
+            if self.presets:
+                at = -1 if self.preset_at is None else self.preset_at
+                self.load_preset((at + (1 if key == ">" else -1)) % len(self.presets))
+            return True
         if key == "+":
             self.save_preset()
             return True
         if key == "X":
             self.delete_preset(now)
             return True
-        if key in ("!", "@", "#", "$", "A"):
+        if key in ("!", "@", "#", "$", "A", "I"):
             if self.encoding != "plot1979":
-                self.note = ("the probe, transmission, HUD and warp are plot1979 only", now + 3.0)
+                self.note = ("the probe, transmission, HUD, warp and invert are plot1979 only",
+                             now + 3.0)
+            elif key == "I":
+                self.effects.invert = not self.effects.invert
             elif key == "!":
                 self.effects.launch_probe(self)
                 self.note = ("probe away: falling in from rest", now + 2.5)
@@ -1063,9 +1078,15 @@ class Live:
             elif key == "#":
                 self.effects.hud = not self.effects.hud
             elif key == "$":
-                if self.projector is None:
-                    self.note = ("the warp needs the compiled path (numba); flash only", now + 3.0)
-                self.effects.launch_warp(self)
+                back = self.effects.warped()
+                if not self.effects.launch_warp(self):
+                    self.note = ("mid-warp: $ once it has come out the other side", now + 2.5)
+                elif self.projector is None:
+                    self.note = ("the warp needs the compiled path (numba) to zoom", now + 3.0)
+                else:
+                    self.note = ("warping back" if back else
+                                 "warp: out into the white hole; $ again to come back",
+                                 now + 3.0)
             else:
                 self.effects.events = not self.effects.events
                 self.effects.next_event = None

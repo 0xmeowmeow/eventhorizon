@@ -1,6 +1,70 @@
+# eventhorizon
+
+A black hole for the terminal.
+
+```shell
+eventhorizon          # or: eh
+```
+
+A live widget for kitty and Ghostty: Luminet's 1979 plot of a black hole, with
+the disk turning at its true Keplerian rates, so the picture never repeats. It
+fills whatever window it is given and follows the window when it is resized, so
+it can sit in a corner of a desktop.
+
+Where the terminal shows images it draws in real pixels, through the kitty
+graphics protocol. Elsewhere it uses braille dots.
+
+The first run solves a bank of 31 lensing maps in the background, one for
+each tilt. That takes about a minute and happens once; the maps are kept in
+`~/.cache/eventhorizon`. After that, tilting, zooming and changing the mass glide
+instead of stepping.
+
+**Presets.** Every start opens a look picked from `~/.config/eventhorizon/presets.toml`.
+`1`–`9` switch between presets, `<` and `>` step through all of them, and `0` picks one at random. `+` saves what is on
+screen as a new preset, and `X` pressed twice deletes the current one. A deleted
+preset is copied to `deleted-presets.toml` first, so it can be put back. Rename
+presets by editing the file. `--preset NAME` opens a particular one, and
+`--preset none` uses the options alone. Options typed on the command line win
+over the preset.
+
+**Events.**
+
+| key | what happens |
+| --- | --- |
+| `!` | A probe falls in from rest. Its direct and ghost images are solved every frame. It slows, reddens and dims as it nears the horizon, and freezes there rather than crossing. |
+| `@` | A transmission arrives: cuneiform signs spiral in with the gas and are swallowed at the photon ring. Sign U+12000+*n* is byte *n*, so the message decodes as it lands. |
+| `#` | The observatory HUD: seven-segment readouts, a reticle locked to one parcel of gas with its redshift factor, and a radar sweep. |
+| `$` | A warp jump: streaks, a white flash, and out into an inverted "white hole" with the gas running backwards. It stays there until `$` brings it back. This one is pure fiction. |
+| `I` | Invert the picture: a white hole as a look, which presets can keep. |
+| `A` | Probes and transmissions arrive on their own every few minutes. |
+
+**Behaving like a widget.** The status line is hidden until `tab` shows it. When
+the window loses focus the frame rate drops to 20fps to save power, and it comes
+back as soon as the window is focused again. Closing the window or sending
+`kill` leaves nothing behind: the images, temporary files and terminal modes
+are all cleaned up.
+
+**Settings.** `~/.config/eventhorizon/config.toml` is written once, with comments,
+and never rewritten. It sets:
+
+- which preset to open with
+- frame rates, focused and unfocused
+- whether the status line shows
+- pixels on, off or detected automatically
+- how often events happen
+- the messages transmissions carry
+
+`h` shows every key. `eventhorizon --help` lists the options by group.
+
+This is a fork of [bgmeulem/luminet](https://github.com/bgmeulem/luminet), whose
+simulation it runs on. The Python package inside is still `luminet`, and the
+`luminet` command still explores the simulation. The rest of this README is
+the library.
+
+# luminet
+
 <div align="center">
   
-# luminet
 ![ci-badge](https://img.shields.io/appveyor/build/bgmeulem/luminet?label=ci&style=flat-square) [![Documentation Status](https://readthedocs.org/projects/luminet/badge/?version=latest&style=flat-square)](https://luminet.readthedocs.io/en/latest/?badge=latest) 
  ![coverage](https://img.shields.io/codecov/c/github/bgmeulem/Luminet?style=flat-square)
 
@@ -21,64 +85,6 @@ Simulate and visualize Swarzschild black holes, based on the methods described i
 </p>
 
 </div>
-
-## 🕳️ A black hole for the terminal
-
-```shell
-luminet spin
-```
-
-A live widget for kitty and Ghostty: Luminet's 1979 plot of a black hole, with
-the disk turning at its true Keplerian rates, so the picture never repeats. It
-fills whatever window it is given and follows the window when it is resized, so
-it can sit in a corner of a desktop.
-
-Where the terminal shows images it draws in real pixels, through the kitty
-graphics protocol. Elsewhere it uses braille dots.
-
-The first run solves a bank of 31 lensing maps in the background, one for
-each tilt. That takes about a minute and happens once; the maps are kept in
-`~/.cache/luminet`. After that, tilting, zooming and changing the mass glide
-instead of stepping.
-
-**Presets.** Every start opens a look picked from `~/.config/luminet/presets.toml`.
-`1`–`9` switch between presets, and `0` picks one at random. `+` saves what is on
-screen as a new preset, and `X` pressed twice deletes the current one. A deleted
-preset is copied to `deleted-presets.toml` first, so it can be put back. Rename
-presets by editing the file. `--preset NAME` opens a particular one, and
-`--preset none` uses the options alone. Options typed on the command line win
-over the preset.
-
-**Events.**
-
-| key | what happens |
-| --- | --- |
-| `!` | A probe falls in from rest. Its direct and ghost images are solved every frame. It slows, reddens and dims as it nears the horizon, and freezes there rather than crossing. |
-| `@` | A transmission arrives: cuneiform signs spiral in with the gas and are swallowed at the photon ring. Sign U+12000+*n* is byte *n*, so the message decodes as it lands. |
-| `#` | The observatory HUD: seven-segment readouts, a reticle locked to one parcel of gas with its redshift factor, and a radar sweep. |
-| `$` | A warp jump: streaks, a white flash, and a pass through an inverted "white hole" with the gas running backwards. This one is pure fiction. |
-| `A` | Probes and transmissions arrive on their own every few minutes. |
-
-**Behaving like a widget.** The status line is hidden until `tab` shows it. When
-the window loses focus the frame rate drops to 5fps to save power, and it comes
-back as soon as the window is focused again. Closing the window or sending
-`kill` leaves nothing behind: the images, temporary files and terminal modes
-are all cleaned up.
-
-**Settings.** `~/.config/luminet/config.toml` is written once, with comments,
-and never rewritten. It sets:
-
-- which preset to open with
-- frame rates, focused and unfocused
-- whether the status line shows
-- pixels on, off or detected automatically
-- how often events happen
-- the messages transmissions carry
-
-`h` shows every key. `luminet spin --help` lists the options by group.
-
-This is a fork of [bgmeulem/luminet](https://github.com/bgmeulem/luminet), whose
-simulation it runs on. The rest of this README is the library.
 
 ## ⚡ Install
 `luminet` is available from [PyPI](https://pypi.org/project/luminet/), [conda-forge](https://anaconda.org/conda-forge/luminet), and [Anaconda](https://anaconda.org/bgmeulem/luminet):

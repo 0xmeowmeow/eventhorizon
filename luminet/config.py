@@ -11,7 +11,7 @@ Two files, kept apart on purpose, in ~/.config/<app>/:
 A deleted preset is not thrown away: it is appended to deleted-presets.toml, so
 a look removed by a stray keypress can be copied back.
 
-The app has no settled name yet. APP is the one place it is spelled.
+APP is the one place the app's name is spelled for its directories.
 """
 
 import json
@@ -20,7 +20,7 @@ import random
 import tomllib
 from pathlib import Path
 
-APP = "luminet"
+APP = "eventhorizon"
 
 DEFAULT_CONFIG = """\
 # Settings for the {app} terminal widget. This file is yours: the app writes it
@@ -30,10 +30,11 @@ DEFAULT_CONFIG = """\
 # "none" starts from the command-line flags alone.
 start = "random"
 
-# Frames a second while the window has focus, and while it does not.
-# 0 for unfocused_fps keeps the full rate all the time.
+# Frames a second while the window has focus, and while it does not. In pixels,
+# 30fps costs about 60% of a core and 20fps about 46%; below 20 the motion
+# starts to look like it lags. 0 for unfocused_fps keeps the full rate always.
 fps = 30
-unfocused_fps = 5
+unfocused_fps = 20
 
 # Show the status line at the bottom. Tab shows or hides it while running.
 status = false
@@ -52,30 +53,54 @@ event_minutes = [4, 10]
 # transmissions = ["hello from the photon ring"]
 """
 
-# A first set of looks, so a random pick has somewhere to go before any have
-# been made. They are ordinary presets: delete or change them freely.
+# The looks a fresh install opens with: the first five made alongside the
+# widget, the rest made by playing with it. They are ordinary presets: delete
+# or change them freely.
 STARTERS = [
-    {"name": "the 1979 plate", "palette": "ink", "glow": "match", "bloom": 0.0,
-     "incl": 1.4, "mass": 1.0, "disk": 40.0, "speed": 0.12, "dust": 0.012,
-     "lines": [], "dots": True, "mask": True, "vignette": False, "scanlines": False,
-     "hud": False},
-    {"name": "ember", "palette": "ember", "glow": "match", "bloom": 0.9,
-     "incl": 1.45, "mass": 1.0, "disk": 36.0, "speed": 0.12, "dust": 0.012,
-     "lines": [], "dots": True, "mask": True, "vignette": True, "scanlines": False,
-     "hud": False},
+    {"name": "the 1979 plate", "palette": "ink", "glow": "match", "bloom": 0.0, "incl": 1.4,
+     "mass": 1.0, "disk": 40.0, "speed": 0.12, "dust": 0.012, "lines": [], "dots": True,
+     "mask": True, "vignette": False, "scanlines": False, "hud": False},
+    {"name": "ember", "palette": "ember", "glow": "match", "bloom": 0.9, "incl": 1.45,
+     "mass": 1.0, "disk": 36.0, "speed": 0.12, "dust": 0.012, "lines": [], "dots": True,
+     "mask": True, "vignette": True, "scanlines": False, "hud": False},
     {"name": "cold isoradials", "palette": "ice", "glow": "plasma", "bloom": 0.45,
      "incl": 1.3, "mass": 1.0, "disk": 40.0, "speed": 0.1, "dust": 0.012,
      "lines": ["radii"], "line_style": "flowing", "line_colour": "blue", "line_width": 2,
      "dots": True, "mask": True, "vignette": False, "scanlines": False, "hud": False},
     {"name": "observatory", "palette": "phosphor", "glow": "match", "bloom": 0.3,
-     "incl": 1.48, "mass": 1.0, "disk": 44.0, "speed": 0.12, "dust": 0.012,
-     "lines": [], "dots": True, "mask": True, "vignette": True, "scanlines": True,
-     "hud": True},
+     "incl": 1.48, "mass": 1.0, "disk": 44.0, "speed": 0.12, "dust": 0.012, "lines": [],
+     "dots": True, "mask": True, "vignette": True, "scanlines": True, "hud": True},
     {"name": "redshift survey", "palette": "ink", "glow": "match", "bloom": 0.0,
      "incl": 1.35, "mass": 1.0, "disk": 40.0, "speed": 0.12, "dust": 0.012,
      "lines": ["redshift"], "line_style": "pulse", "line_colour": "redshift",
      "line_width": 2, "dots": True, "mask": True, "vignette": False, "scanlines": False,
      "hud": False},
+    {"name": "inferno sweep", "palette": "inferno", "glow": "copper", "bloom": 1.35,
+     "incl": 1.3, "mass": 1.0, "disk": 40.0, "speed": 0.1, "dust": 0.02,
+     "lines": ["flux", "redshift"], "line_style": "sweep", "line_colour": "redshift",
+     "line_width": 2, "dots": True, "mask": True, "vignette": True, "scanlines": False,
+     "hud": False},
+    {"name": "magma copper", "palette": "magma", "glow": "copper", "bloom": 1.35,
+     "incl": 1.3, "mass": 1.0, "disk": 40.0, "speed": 0.1, "dust": 0.02, "lines": [],
+     "line_style": "sweep", "line_colour": "redshift", "line_width": 2, "dots": True,
+     "mask": True, "vignette": True, "scanlines": False, "hud": False},
+    {"name": "ice edge-on", "palette": "ice", "glow": "bw", "bloom": 1.35, "incl": 1.55,
+     "mass": 1.0, "disk": 36.0, "speed": 0.1, "dust": 0.02, "lines": [],
+     "line_style": "sweep", "line_colour": "redshift", "line_width": 2, "dots": True,
+     "mask": True, "vignette": True, "scanlines": False, "hud": False},
+    {"name": "bone, wide", "palette": "bone", "glow": "bw", "bloom": 0.45, "incl": 1.55,
+     "mass": 1.0, "disk": 60.0, "speed": 0.1, "dust": 0.02, "lines": [],
+     "line_style": "sweep", "line_colour": "redshift", "line_width": 2, "dots": True,
+     "mask": True, "vignette": True, "scanlines": False, "hud": False},
+    {"name": "copper spectrum", "palette": "copper", "glow": "bw", "bloom": 0.0,
+     "incl": 1.55, "mass": 1.0, "disk": 60.0, "speed": 0.1, "dust": 0.02,
+     "lines": ["redshift"], "line_style": "sweep", "line_colour": "spectrum",
+     "line_width": 2, "dots": True, "mask": True, "vignette": True, "scanlines": False,
+     "hud": False},
+    {"name": "gameboy", "palette": "gameboy", "glow": "match", "bloom": 0.6, "incl": 1.4,
+     "mass": 1.0, "disk": 40.0, "speed": 0.1, "dust": 0.02, "lines": [],
+     "line_style": "sweep", "line_colour": "spectrum", "line_width": 2, "dots": True,
+     "mask": True, "vignette": True, "scanlines": False, "hud": False},
 ]
 
 
@@ -137,9 +162,9 @@ def dump_presets(presets, header=""):
 
 
 PRESETS_HEADER = """\
-# Presets for the {app} widget, managed by the app: 1-9 pick one while it runs,
-# + saves the current look, X twice deletes the current one. Renaming or editing
-# values by hand is fine; comments here are not kept.
+# Presets for {app}, managed by the app: 1-9 pick one while it runs, < and >
+# step through them all, + saves the current look, X twice deletes the current
+# one. Renaming or editing values by hand is fine; comments here are not kept.
 """
 
 

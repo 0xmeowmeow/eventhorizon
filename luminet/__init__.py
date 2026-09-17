@@ -5,8 +5,16 @@
 try:
     from importlib.metadata import version, metadata
 
-    __version__ = version("luminet")
-    _meta = metadata("luminet")
+    from importlib.metadata import PackageNotFoundError
+
+    # Installed as eventhorizon, which carries the luminet package; plain
+    # luminet if installed from upstream.
+    try:
+        __version__ = version("eventhorizon")
+        _meta = metadata("eventhorizon")
+    except PackageNotFoundError:
+        __version__ = version("luminet")
+        _meta = metadata("luminet")
 
     # Parse author-email field (format: "Name <email@example.com>")
     author_email = _meta.get("Author-email", "")

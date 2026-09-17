@@ -1,8 +1,8 @@
 [project]
 authors = [{ name = "bgmeulem", email="bjorge.meulemeester@mpinb.mpg.de"}]
-description = "A leightweight Python package for calculating and plotting Swarzschild black holes with thin accretion disk."
-name = "luminet"
-version = "0.2.3"
+description = "A black hole for the terminal: Luminet's 1979 plot, live, on the luminet simulation of Schwarzschild black holes."
+name = "eventhorizon"
+version = "1.0.0"
 requires-python = ">=3.5"
 
 classifiers = [
@@ -24,18 +24,25 @@ tui = ["textual>=1.0", "textual-image>=0.6"]
 fast = ["numba>=0.60"]
 
 [project.scripts]
+eventhorizon = "luminet.cli:widget"
+eh = "luminet.cli:widget"
 luminet = "luminet.cli:main"
 
 [project.urls] 
 "Homepage" = "https://luminet.readthedocs.io/en/latest/"
 "Documentation" = "https://luminet.readthedocs.io/en/latest/"
-"Bug Reports" = "https://github.com/bgmeulem/luminet/issues/new"
-"Source" = "https://github.com/bgmeulem/luminet"
+"Bug Reports" = "https://github.com/0xmeowmeow/eventhorizon/issues/new"
+"Source" = "https://github.com/0xmeowmeow/eventhorizon"
+"Upstream" = "https://github.com/bgmeulem/luminet"
 
 [dependency-groups]
 build = ["build>=1.2.2.post1,<2"]
 
 [tool.setuptools]
+packages = ["luminet"]
+
+# The distribution is eventhorizon; the package inside it is still luminet.
+[tool.hatch.build.targets.wheel]
 packages = ["luminet"]
 
 [build-system]
