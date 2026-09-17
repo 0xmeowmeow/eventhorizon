@@ -51,7 +51,9 @@ screen.
 - **Packaging.** v1.0.0 is tagged, with a GitHub release carrying the .deb.
   Both packages were built from the tag in clean containers (245 tests each).
   AUR push and the Debian ITP/mentors route need the user's accounts; the
-  steps are in packaging/README.md.
+  steps are in packaging/README.md. AUR registration was closed on
+  2026-09-18 (a wave of automated sign-ups); wait for aur-general or the Arch
+  news feed rather than retrying.
 - **meow-meow.io.** The page is written at meow-meow.io/eventhorizon/ with
   recordings, not deployed and not committed there (25 MB of video). The tile
   and updates entry wait in site/ until another session finishes editing
