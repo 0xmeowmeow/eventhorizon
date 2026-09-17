@@ -141,3 +141,31 @@ def test_fit_extent_uses_the_measured_aspect_at_call_time():
         spin.CELL_ASPECT = saved
     assert square[0] == pytest.approx(square[1])
     assert narrow[0] == pytest.approx(narrow[1] * 0.5)
+
+
+def test_geometric_rings_and_parcel_weights():
+    """Log-spaced rings still sample parcels evenly in log radius."""
+    settings = {"mass": 1.0, "incl": 1.4, "acc": 1.0, "outer_edge": 400.0}
+    mapping = spin.lensing_map(settings, n_rings=40, n_angles=60, spacing="log")
+    radii = mapping["radii"]
+    assert np.allclose(np.diff(np.log(radii)), np.diff(np.log(radii))[0])
+    parcels = spin.Parcels(radii, count=200000, seed=1, clumps=0, spread="log")
+    counts = np.bincount(parcels.ring, minlength=len(radii))
+    # Interior rings each stand for an equal log band, so should draw alike.
+    inner = counts[2:-2]
+    assert inner.std() / inner.mean() < 0.05
+
+
+def test_dust_floor_only_where_the_disk_lights(disk):
+    mapping, extent, rates = disk
+    width, height = 80, 60
+    parcels = spin.Parcels(mapping["radii"], count=width * height * 2, seed=3,
+                           clumps=0, spread="log")
+    field = spin.DotField(mapping, parcels, width, height, extent, rates, floor=0.0)
+    dark = ~field.lit_by_disk.reshape(height, width)
+    before = field.target.copy()
+    field.set_floor(0.05)
+    lit = ~dark
+    assert (field.target[lit] >= 0.05 - 1e-12).all()
+    assert (field.target[dark] == 0).all()
+    assert (field.target >= before - 1e-12).all()

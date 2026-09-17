@@ -115,7 +115,7 @@ class PixelView:
 
     def __init__(self, mapping, extent, rates, projector, orders, cols, rows,
                  cell_px, transport, seed=0, infall=0.0, gamma=0.6, grain=4,
-                 density=2.5):
+                 density=2.5, floor=0.0):
         self.cols, self.rows = cols, rows
         self.transport = transport
         scale = 1 if transport.mode == "file" else 2
@@ -139,7 +139,7 @@ class PixelView:
                                         seed=seed, infall=infall, clumps=0, spread="log")
             self.field = spin.DotField(mapping, self.parcels, self.grid_w, self.grid_h,
                                        extent, rates, orders, gamma=gamma,
-                                       projector=projector)
+                                       projector=projector, floor=floor)
             ext_x, ext_y = self.field.ext_x, self.field.ext_y
             self.lines = spin.Isolines(mapping, self.px_w, self.px_h, ext_x, ext_y,
                                        samples=int(8 * max(self.px_w, self.px_h)))
@@ -198,7 +198,17 @@ class PixelView:
             rx = self.critical / self.ext_x * (self.px_w - 1) / 2.0
             ry = self.critical / self.ext_y * (self.px_h - 1) / 2.0
             dist = np.hypot((xx - cx) / rx, (yy - cy) / ry) * min(rx, ry)
-            cover = np.clip(min(rx, ry) - dist + 0.5, 0.0, 1.0)[..., None]
+            cover = np.clip(min(rx, ry) - dist + 0.5, 0.0, 1.0)
+            # The near side of the disk passes in front of the hole; its glow is
+            # left alone. Softened, because its edge comes from samples.
+            from scipy.ndimage import gaussian_filter, zoom
+
+            front = gaussian_filter((self.field.front > 0).astype(np.float32), 1.0)
+            front = zoom(front, grain, order=1)
+            front = np.pad(front, ((0, max(0, self.px_h - front.shape[0])),
+                                   (0, max(0, self.px_w - front.shape[1]))),
+                           mode="edge")[:self.px_h, :self.px_w]
+            cover = (cover * (1.0 - np.clip(front * 1.5, 0.0, 1.0)))[..., None]
             bg = bg * (1.0 - cover) + np.array(hole, np.float32) * cover
         if vignette:
             fx = xx / max(self.px_w - 1, 1) * 2 - 1

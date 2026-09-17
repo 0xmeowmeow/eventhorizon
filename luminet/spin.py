@@ -43,7 +43,7 @@ from luminet.black_hole import BlackHole
 
 
 def lensing_map(settings, n_rings=48, n_angles=180, orders=(0, 1),
-                on_progress=None, batches=10):
+                on_progress=None, batches=10, spacing="linear"):
     """Solve where light from each (radius, angle) lands, once.
 
     Returns the radii and angles sampled, and per image order a pair of
@@ -57,7 +57,13 @@ def lensing_map(settings, n_rings=48, n_angles=180, orders=(0, 1),
         angular_resolution=n_angles,
         radial_resolution=n_rings,
     )
-    radii = np.linspace(bh.disk_inner_edge, bh.disk_outer_edge, n_rings)
+    if spacing == "log":
+        # Evenly in log radius. A disk wide enough to fill the frame edge-on
+        # runs out to hundreds of M, and linear spacing would spend most rings
+        # far out and thin the detail near the hole, where the light bends most.
+        radii = np.geomspace(bh.disk_inner_edge, bh.disk_outer_edge, n_rings)
+    else:
+        radii = np.linspace(bh.disk_inner_edge, bh.disk_outer_edge, n_rings)
     # Solve a few rings at a time. calc_isoradials accumulates and skips radii it
     # already holds, so this costs almost nothing and lets a caller show real
     # progress rather than a guess at how long is left.
@@ -130,14 +136,17 @@ class Parcels:
     def __init__(self, radii, count=9000, seed=0, infall=0.0, clumps=5, depth=0.9,
                  spread="area"):
         rng = np.random.default_rng(seed)
+        # Each ring stands for the band of radius around it, which is not the
+        # same width everywhere once rings can be spaced geometrically.
+        band = np.gradient(radii.astype(float)) if len(radii) > 1 else np.ones(1)
         if spread == "log":
             # Evenly in log radius. Where each cell's brightness is measured and
             # then imposed, parcels only have to cover the picture, and a wide
             # disk sampled by area puts almost all of them far off its edges.
-            weights = 1.0 / radii
+            weights = band / radii
         else:
-            # Weight by radius so the disk is evenly covered by area, not ring.
-            weights = radii.astype(float)
+            # Weight by area so the disk is evenly covered, not ring by ring.
+            weights = band * radii
         weights = weights / weights.sum()
         self.ring = rng.choice(len(radii), size=count, p=weights)
         self.angle0 = rng.random(count) * 2 * np.pi
@@ -482,7 +491,7 @@ class DotField:
     """
 
     def __init__(self, mapping, parcels, width, height, extent, rates, orders=(0, 1),
-                 gamma=0.6, smooth=1.4, projector=None, moments=12):
+                 gamma=0.6, smooth=1.4, projector=None, moments=12, floor=0.0):
         from scipy.ndimage import gaussian_filter
 
         self.mapping, self.parcels = mapping, parcels
@@ -518,6 +527,9 @@ class DotField:
             scales.append(self._scale(moment_total, moment_count, smooth))
         count /= moments
         total /= moments
+        # Where the direct image lands. Inside the shadow, that is gas on the near
+        # side of the disk passing in front of the hole.
+        self.front = count[0].reshape(height, width)
 
         # Brightness per cell, as dots() measures it: a mean over whatever lands
         # there, both images together, smoothed, the shadow kept black.
@@ -530,8 +542,29 @@ class DotField:
         mean = mean.ravel()
         scale = float(np.mean(scales)) if scales else 1.0
         target = np.clip(mean / max(scale, 1e-30), 0.0, 1.0) ** gamma
-        self.target = target.reshape(height, width)
+        self.lit_by_disk = mean > 0
+        self.base_target = target
+        self.n = both_n
+        self.chance = np.empty((2, cells_n))
+        self.set_floor(floor)
+        self.lit = np.zeros(cells_n, dtype=np.bool_)
 
+    def set_floor(self, floor):
+        """A least chance of a dot wherever any light arrives.
+
+        Brightness falls off steeply with distance from the hole, so the far disk
+        earns almost no dots: nearly edge-on, the gas that reaches a tall
+        window's lower edge gives each cell a fifth of the chance the same place
+        had at 1.40. A floor keeps a thin dust of dots across everything the
+        disk lights, which is the look of the 1979 figure. It is a choice about
+        appearance, not physics, and nowhere the disk does not light is touched.
+        Cheap to change: nothing is projected again.
+        """
+        self.floor = float(floor)
+        target = np.where(self.lit_by_disk,
+                          self.floor + (1.0 - self.floor) * self.base_target, 0.0)
+        self.target = target.reshape(self.height, self.width)
+        both_n = self.n
         # A cell is lit if any of its samples draws under the chance, so each
         # sample's chance is set from how many usually arrive - but never from
         # fewer than one. Where the disk is thin a cell is often empty, and
@@ -540,9 +573,7 @@ class DotField:
         # an empty cell simply stays dark, so the faint outer disk looks faint;
         # topping it up lit a third more dots there than the look this matches.
         n = np.maximum(both_n, 1.0)
-        self.chance = np.empty((2, cells_n))
         self.chance[:] = 1.0 - (1.0 - target[None, :]) ** (1.0 / n[None, :])
-        self.lit = np.zeros(cells_n, dtype=np.bool_)
 
     def _scale(self, total, count, smooth):
         """The 99.3rd percentile of one moment's smoothed brightness."""

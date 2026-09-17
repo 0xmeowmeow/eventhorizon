@@ -1114,6 +1114,9 @@ def build_parser():
     p.add_argument("--pixels", action="store_true",
                    help="plot1979 in real pixels, through the kitty graphics protocol "
                         "(kitty or Ghostty); x toggles it while running")
+    p.add_argument("--dust", type=float, default=0.012,
+                   help="plot1979: least chance of a dot wherever the disk sends any light, "
+                        "so its faint outer reaches still show a thin dust. d and D change it")
     p.add_argument("--pixel-grain", type=int, default=4,
                    help="pixels: size in pixels of the patches dot density is decided "
                         "over. Smaller is denser and finer, and slower")

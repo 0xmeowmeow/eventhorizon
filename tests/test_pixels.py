@@ -41,13 +41,33 @@ def test_direct_escape_carries_the_frame(view):
 
 
 def test_mask_is_round_in_pixels(view):
-    """The shadow mask is a circle at the display's own resolution."""
+    """
+    The shadow mask is a circle at the display's own resolution. Its lower half
+    is partly glow now, where near-side gas passes in front, so the circle is
+    measured from its upper half: the top should sit a radius above the centre.
+    """
     v, rates = view
-    v.restyle("ink", "match", 0.0, True, False, False, INK, PAPER, HOLE)
+    v.restyle("ink", "match", 1.0, True, False, False, INK, PAPER, HOLE)
     black = (v.background == HOLE).all(axis=2)
     ys, xs = np.nonzero(black)
-    width, height = xs.max() - xs.min() + 1, ys.max() - ys.min() + 1
-    assert height / width == pytest.approx(1.0, abs=0.06)
+    width = xs.max() - xs.min() + 1
+    top = (v.px_h - 1) / 2.0 - ys.min()
+    assert 2 * top / width == pytest.approx(1.0, abs=0.08)
+
+
+def test_glow_is_not_masked_where_gas_crosses_the_shadow(view):
+    """Inside the circle, where the direct image lands, the glow shows."""
+    v, rates = view
+    v.restyle("ink", "match", 1.0, True, False, False, INK, PAPER, HOLE)
+    yy, xx = np.mgrid[0:v.px_h, 0:v.px_w]
+    cx, cy = (v.px_w - 1) / 2.0, (v.px_h - 1) / 2.0
+    r = v.critical / v.ext_x * (v.px_w - 1) / 2.0
+    inside = np.hypot(xx - cx, yy - cy) < r * 0.9
+    black = (v.background == HOLE).all(axis=2)
+    lower = inside & (yy > cy + r * 0.3)
+    upper = inside & (yy < cy - r * 0.3)
+    assert black[upper].mean() > 0.95           # the far side: masked
+    assert black[lower].mean() < 0.5            # gas in front: glowing
 
 
 @pytest.mark.skipif(not fast.available, reason="numba is not installed")

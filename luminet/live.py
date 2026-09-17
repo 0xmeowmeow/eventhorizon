@@ -68,6 +68,7 @@ HELP = [
     ("i", "1979: isoradials off, drawn, flowing"),
     ("k  K", "1979: glow palette, separate from the dots"),
     ("m", "1979: keep the glow out of the shadow"),
+    ("d  D", "1979: less or more dust where the disk is faint"),
     ("x", "1979: real pixels, through the kitty graphics protocol"),
     ("o", "1979: hide or show the dots"),
     ("y", "cycle everything, hands off"),
@@ -152,6 +153,7 @@ class Live:
         self.glow_at = 0
         self.mask_on = True
         self.pixels_on = bool(getattr(opts, "pixels", False))
+        self.dust = float(getattr(opts, "dust", 0.012))
         self.transport_mode = None     # found by probing, the first time it is needed
         self.pixel_view = None
         self.note = ("", 0.0)
@@ -215,19 +217,19 @@ class Live:
                 self.mapping, self.extent, self.rates, self.projector, orders,
                 self.cols, self.rows, self.cell_px, pixels.Transport(self.transport_mode),
                 seed=self.seed, infall=self.o.infall, gamma=self.o.ink_gamma,
-                grain=getattr(self.o, "pixel_grain", 4))
+                grain=getattr(self.o, "pixel_grain", 4), floor=self.dust)
         elif self.encoding == "plot1979":
             # No tracer: the dots are the material, so the motion shows without
             # one. Many parcels, because most of them are faint and thinly kept.
-            self.dust = spin.Parcels(self.mapping["radii"], count=int(self.w * self.h * 2.5),
+            self.dust_parcels = spin.Parcels(self.mapping["radii"], count=int(self.w * self.h * 2.5),
                                      seed=self.seed, infall=self.o.infall, clumps=0,
                                      spread="log")
             # How bright each cell should be is fixed for a given map and
             # window, so it is measured here once rather than every frame.
             orders = (0,) if self.o.no_ghost else (0, 1)
-            self.field = spin.DotField(self.mapping, self.dust, self.w, self.h, self.extent,
-                                       self.rates, orders, gamma=self.o.ink_gamma,
-                                       projector=self.projector)
+            self.field = spin.DotField(self.mapping, self.dust_parcels, self.w, self.h,
+                                       self.extent, self.rates, orders, gamma=self.o.ink_gamma,
+                                       projector=self.projector, floor=self.dust)
             self.isolines = spin.Isolines(self.mapping, self.w, self.h,
                                           self.field.ext_x, self.field.ext_y)
             self.hole = self.shadow_coverage()
@@ -251,7 +253,14 @@ class Live:
         if self.encoding != "plot1979":
             return self.settings
         wide = dict(self.settings)
-        wide["outer_edge"] = max(160.0, self.settings["outer_edge"] * 4)
+        # Nearly edge-on, the disk's band on screen is its radius times the
+        # cosine of the inclination, so a fixed radius leaves the top and bottom
+        # of a tall window empty: at 1.50 a disk to 160 put no light at all in the
+        # bottom tenth of a tall window. Widening as 1 / cos(inclination), from a
+        # size that fills it comfortably at 1.30, keeps the frame covered.
+        base = max(160.0, self.settings["outer_edge"] * 4)
+        tilt = np.cos(1.30) / max(np.cos(self.settings["incl"]), 0.02)
+        wide["outer_edge"] = float(min(2000.0, base * max(1.0, tilt)))
         return wide
 
     def solve(self, why=""):
@@ -273,6 +282,7 @@ class Live:
             physics, n_rings=rings, n_angles=self.o.angles,
             orders=(0,) if self.o.no_ghost else (0, 1),
             on_progress=bar, batches=6,
+            spacing="log" if self.solved_for else "linear",
         )
         orders = (0,) if self.o.no_ghost else (0, 1)
         if self.solved_for:
@@ -473,7 +483,17 @@ class Live:
         bx = (dot_x / (self.w - 1) * 2 - 1) * self.field.ext_x
         by = (dot_y / (self.h - 1) * 2 - 1) * self.field.ext_y
         inside = (by[:, None, :, None] ** 2 + bx[None, :, None, :] ** 2) < radius ** 2
-        return inside.mean(axis=(2, 3)).astype(np.float32)
+        cover = inside.mean(axis=(2, 3)).astype(np.float32)
+        # Gas on the near side of the disk passes in front of the hole, and the
+        # glow belongs to that gas, so it is not masked where the gas is. The
+        # direct image's footprint is softened a little, since at its edge it is
+        # measured from samples and is ragged.
+        from scipy.ndimage import gaussian_filter
+
+        front = (self.field.front > 0).astype(np.float32)
+        front = gaussian_filter(front, 1.0)[:rows * 4, :cols * 2]
+        in_front = front.reshape(rows, 4, cols, 2).mean(axis=(1, 3))
+        return cover * (1.0 - np.clip(in_front * 1.5, 0.0, 1.0))
 
     def cell_colours(self, value, mask, star_dots):
         """A palette colour for each cell, from the light that falls in it.
@@ -546,9 +566,19 @@ class Live:
 
         if key in ("q", "\x1b", "\x03"):
             return False
-        if self.encoding == "plot1979" and key in ("g", "d", "f", "a"):
-            what = {"g": "stars", "d": "dither", "f": "edge softening",
-                    "a": "antialiasing"}[key]
+        if self.encoding == "plot1979" and key in ("d", "D"):
+            self.dust = float(np.clip(self.dust + (0.004 if key == "D" else -0.004), 0.0, 0.1))
+            for view in (getattr(self, "field", None),
+                         getattr(self.pixel_view, "field", None) if self.pixel_view else None):
+                if view is not None:
+                    view.set_floor(self.dust)
+            if self.pixel_view is not None:
+                self.pixel_view.look = None          # dot colours follow brightness
+            self.note = (f"dust {self.dust:.3f}: least chance of a dot wherever light "
+                         f"arrives", time.monotonic() + 2.5)
+            return True
+        if self.encoding == "plot1979" and key in ("g", "f", "a"):
+            what = {"g": "stars", "f": "edge softening", "a": "antialiasing"}[key]
             self.note = (f"{what} is for half, sextant and braille; plot1979 has none",
                          time.monotonic() + 3.0)
             return True
