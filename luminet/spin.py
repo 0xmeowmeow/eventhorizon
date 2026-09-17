@@ -320,12 +320,21 @@ def frame(mapping, parcels, phase, width, height, extent, turns, orders=(0, 1),
     }
 
 
-# A half-block subpixel in kitty and Ghostty is 10 wide by 11 tall, so it is
-# very slightly taller than it is wide. Everything else assumes square samples.
+# Width over height of one sample - a half-block subpixel, a sextant or a
+# braille dot. 10/11 is a half block or braille dot in a 10x22 pixel cell, which
+# is what kitty and Ghostty measured with the lab font. The live view replaces it
+# with the real figure, read from the terminal, for the encoding in use, since a
+# different font, size or subdivision gives a different shape and an unround
+# shadow.
 CELL_ASPECT = 10.0 / 11.0
 
 
-def fit_extent(extent, width, height, cell_aspect=CELL_ASPECT, reach_y=None):
+def sample_aspect(cell_w, cell_h, across, down):
+    """Width over height of one sample when a cell is split across x down."""
+    return (cell_w / across) / (cell_h / down)
+
+
+def fit_extent(extent, width, height, cell_aspect=None, reach_y=None):
     """Physical half-width and half-height that keep the picture in proportion.
 
     A terminal window is whatever shape somebody dragged it to, and mapping a
@@ -337,6 +346,8 @@ def fit_extent(extent, width, height, cell_aspect=CELL_ASPECT, reach_y=None):
     own bounding box is what gets fitted: the scale is whichever axis runs out
     first, and the other simply shows more empty sky.
     """
+    if cell_aspect is None:
+        cell_aspect = CELL_ASPECT      # read now, so a measured value takes effect
     reach_y = extent if reach_y is None else max(reach_y, 1e-6)
     on_screen_w = width * cell_aspect
     on_screen_h = height

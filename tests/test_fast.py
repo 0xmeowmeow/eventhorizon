@@ -121,3 +121,23 @@ def test_braille_backgrounds_are_sent_per_cell():
     out = cells.braille(mask, colours=fg, backgrounds=bg)
     assert out.count("38;2;200;0;0") == 1
     assert "48;2;0;0;50" in out and "48;2;0;0;90" in out
+
+
+def test_sample_aspect_follows_the_cell_and_the_split():
+    # A 10x22 cell split into a braille grid, and into sextants.
+    assert spin.sample_aspect(10, 22, 2, 4) == pytest.approx(10 / 11)
+    assert spin.sample_aspect(10, 22, 2, 3) == pytest.approx(15 / 22)
+    assert spin.sample_aspect(8, 16, 2, 4) == pytest.approx(1.0)
+
+
+def test_fit_extent_uses_the_measured_aspect_at_call_time():
+    saved = spin.CELL_ASPECT
+    try:
+        spin.CELL_ASPECT = 1.0
+        square = spin.fit_extent(10.0, 100, 100, reach_y=10.0)
+        spin.CELL_ASPECT = 0.5
+        narrow = spin.fit_extent(10.0, 100, 100, reach_y=10.0)
+    finally:
+        spin.CELL_ASPECT = saved
+    assert square[0] == pytest.approx(square[1])
+    assert narrow[0] == pytest.approx(narrow[1] * 0.5)

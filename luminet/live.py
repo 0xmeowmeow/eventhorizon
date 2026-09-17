@@ -74,6 +74,28 @@ HELP = [
 ]
 
 
+def cell_size():
+    """The terminal's character cell in pixels, and whether it was measured.
+
+    The call that reports rows and columns also carries the window's size in
+    pixels, which kitty and Ghostty fill in. Dividing one by the other gives
+    the real cell, so the picture can be kept in proportion for whatever font
+    and size are in use rather than for the one it was first tried with.
+    """
+    import fcntl
+    import struct
+
+    for fd in (sys.stdout.fileno(), sys.stdin.fileno()):
+        try:
+            rows, cols, px_w, px_h = struct.unpack(
+                "HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8))
+        except OSError:
+            continue
+        if rows and cols and px_w and px_h:
+            return (px_w / cols, px_h / rows), True
+    return (10.0, 22.0), False
+
+
 def keys_in(text):
     """The keypresses in a chunk of terminal input, with escape sequences removed.
 
@@ -138,6 +160,10 @@ class Live:
         self.rows = self.o.height or max(8, size.lines - 2)
         sub = ENCODINGS[self.encoding]
         self.w, self.h = self.cols * sub["x"], self.rows * sub["y"]
+        # Measured every time the window changes: zooming the font sends the
+        # same resize signal and changes the cell's shape.
+        self.cell_px, self.cell_measured = cell_size()
+        spin.CELL_ASPECT = spin.sample_aspect(*self.cell_px, sub["x"], sub["y"])
         # Only half-block needs supersampling: the others already sample well
         # below a cell, which is what smooths their edges.
         use_ss = self.ss if self.encoding == "half" else 1
@@ -433,7 +459,9 @@ class Live:
         s = self.settings
         bits = [f"incl {s['incl']:.2f}", f"mass {s['mass']:.2f}",
                 f"disk {s['outer_edge']:.0f}", self.encoding,
-                PALETTE_CYCLE[self.palette_at], f"{self.cols}x{self.rows}"]
+                PALETTE_CYCLE[self.palette_at], f"{self.cols}x{self.rows}"
+                + (f" @{self.cell_px[0]:.0f}x{self.cell_px[1]:.0f}px"
+                   if getattr(self, "cell_measured", False) else " cell size assumed")]
         if self.cycling:
             bits.append("cycling")
         if self.encoding == "plot1979":
