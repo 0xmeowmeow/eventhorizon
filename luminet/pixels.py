@@ -38,6 +38,32 @@ from luminet import cells, spin
 APC_END = "\x1b\\"
 
 
+def probe_graphics(timeout=1.0):
+    """Whether the terminal shows images at all, through the kitty protocol.
+
+    Sends a one-pixel query, which displays nothing, followed by a request
+    every terminal answers - primary device attributes. A terminal without the
+    graphics protocol ignores the query and answers only the second, so there
+    is no waiting out a timeout to learn it cannot.
+    """
+    import re
+
+    sys.stdout.write(f"\x1b_Gi=32,s=1,v=1,a=q,t=d,f=24;AAAA{APC_END}\x1b[c")
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    seen = b""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if select.select([fd], [], [], max(0.0, deadline - time.monotonic()))[0]:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            seen += chunk
+            if re.search(rb"\x1b\[\?[0-9;]*c", seen):
+                break
+    return b"_Gi=32;OK" in seen
+
+
 def probe_file_transport(timeout=0.6):
     """Ask the terminal whether it accepts images by temporary file.
 
@@ -81,7 +107,9 @@ class Transport:
 
     def escape(self, img, cols, rows):
         h, w = img.shape[:2]
-        placement = f"i=1,p=1,c={cols},r={rows},q=2,C=1"
+        # z=-1 puts the picture under text, so glyphs, readouts and the status
+        # line can be written over it, while still over cell backgrounds.
+        placement = f"i=1,p=1,c={cols},r={rows},q=2,C=1,z=-1"
         if self.mode == "file":
             # A few names in rotation: the terminal deletes a file once read,
             # and never overwriting the one it may still be reading avoids a race.
@@ -223,7 +251,7 @@ class PixelView:
 
     # ------------------------------------------------------------------ frame
 
-    def frame(self, t, rates, dots_on=True, lines=None, line_width=2):
+    def frame(self, t, rates, dots_on=True, lines=None, line_width=2, post=None):
         img = self.background.copy()
         if dots_on:
             if self.projector is not None:
@@ -235,10 +263,12 @@ class PixelView:
         if lines and self.lineset is not None:
             idx, rgb = self.lineset.draw(t, rates, width=line_width, **lines)
             img.reshape(-1, 3)[idx] = rgb
+        if post is not None:
+            post(img, self.ext_x, self.ext_y)
         return self.transport.escape(img, self.cols, self.rows)
 
     def frame_moving(self, t, rates, mapping, extent, palette, glow_palette, bloom, mask,
-                     ink, paper, hole, dots_on=True):
+                     ink, paper, hole, dots_on=True, post=None):
         """A frame while the view tilts or zooms: measured now, drawn cheaply.
 
         The still frame's glow, mask and dot colours are built once from a
@@ -305,6 +335,8 @@ class PixelView:
         if dots_on:
             self.projector.paint(self.parcels, t, rates, live.ext_x, live.ext_y,
                                  self.grid_w, self.grid_h, live.chance, cell_rgb, img, self.dot)
+        if post is not None:
+            post(img, live.ext_x, live.ext_y)
         return self.transport.escape(img, self.cols, self.rows)
 
     def _paint_numpy(self, img, t, rates):

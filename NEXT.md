@@ -1,38 +1,57 @@
-# Where this was left (parked 2026-09-17)
+# Where this was left (2026-09-18)
 
-Branch `fix/photon-sampling-rng`; `master` is still upstream. Nothing uncommitted.
+Branch `fix/photon-sampling-rng`; `master` is still upstream.
 
 ## Running it
 
-    luminet spin            # plot1979, ink palette, live; h for keys, q to quit
+    luminet spin            # the widget; h for keys, tab for status, q to quit
 
 `luminet` is an alias in ~/.zshrc for `luminet-launcher`, which uses the
-project venv. numba is installed there; the status line says `compiled` when
-the fast path is active.
+project venv (numba installed; status says `compiled`).
 
-## Open decisions
+## v1 widget: built
 
-- **Frame rate.** Settled: 30fps is the default and costs about a third of a
-  core at full screen, since brightness per cell is now measured once per map
-  and window instead of every frame.
-- **Ghostty glow.** A custom shader post-processing what the app draws. Parked.
-- **Pixel mode (x, --pixels) is unverified on a real screen.** Checked only by
-  decoding what the app sends. Whether Ghostty accepts the /dev/shm file route
-  is found by probing at startup; if not it falls back to half resolution sent
-  inline. Full screen costs about 55% of a core at 30fps, against 34% for
-  braille. Dots are sparser than the plate; --pixel-grain and --ink-gamma tune it.
+- Presets in ~/.config/luminet/presets.toml (app-managed; five starters seeded
+  on first run). 1-9 / 0 pick, + saves, X X deletes (archived to
+  deleted-presets.toml). config.toml is written once and never rewritten.
+  Precedence: typed options > opening preset > config > defaults.
+- Pixels by default when the terminal answers a graphics probe (kitty query
+  plus a DA1 sentinel), else braille. Images are placed at z=-1 so text can
+  sit over them.
+- Full window; the status line is hidden and drawn over the bottom row (tab).
+- Focus reports (CSI ?1004h): 5fps while unfocused (config unfocused_fps, 0
+  disables). Waiting is on select(), so keys answer at once at low rates.
+- SIGHUP/SIGTERM exit cleanly: images deleted, /dev/shm files removed,
+  terminal modes restored. Verified through a pty.
+- First run with no bank: a notice explaining the bank, then a bottom-line
+  count until it completes.
+- `--version`, grouped `spin --help`, README leads with the widget.
 
-- **Inclination and zoom in real time.** Discussed, not built. Tilting now
-  re-solves the lensing map and rebuilds the dot field, about 1-3 seconds a
-  step. Real time would mean precomputing maps across a range of inclinations
-  once, in a subprocess, and blending between neighbours. Zoom could resample
-  the per-cell brightness while the gesture lasts and re-measure after.
+## Events (luminet/effects.py): built
+
+`!` probe, `@` cuneiform transmission, `#` HUD, `$` warp, `A` automatic events
+(every 4-10 min, config). One canvas interface paints into both the pixel
+image and the braille cells; glyphs go on as text. About 2 ms a frame with
+everything running. Verified by decoding pty output, not yet by eye on a real
+screen.
+
+## Open
+
+- **Name.** The user is choosing one; `luminet` is taken on PyPI. The config
+  directory name lives in `config.APP`.
+- **GitHub.** Agreed: fork bgmeulem/Luminet to 0xmeowmeow and push. A fork of a
+  public repo is public. An upstream PR would carry only the library fixes (RNG
+  sampling, redshift defaults, color_by redshift, cos_gamma warning), on its
+  own branch.
+- **Packaging** for Debian and Arch/Omarchy, after the name.
+- The grey band just outside the shadow in pixel mode predates this work.
+- Unfocused 5fps may be wrong for a desktop widget that is rarely focused;
+  unfocused_fps = 0 in config.toml turns it off.
+- Ghostty glow shader, octants, smooth infall: parked.
 
 ## Known rough edges
 
 - `--infall` shifts gas between discrete rings rather than moving it smoothly.
-- Octants (Unicode 16) are not implemented; Python 3.13 cannot name them.
-- True pixel-sized stars or dots would need the kitty graphics protocol.
 - Measuring CPU through a pseudo-terminal: pass the interpreter's absolute path
   as argv[0], or Python resolves to the system interpreter and loses the venv.
 

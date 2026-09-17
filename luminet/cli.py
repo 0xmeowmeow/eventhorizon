@@ -640,6 +640,8 @@ def cmd_spin(args):
     if not (args.gif or args.save_frames or args.loop):
         from luminet import live
 
+        widget_settings(args, parser_for_spin(), getattr(args, "argv", sys.argv[1:]),
+                        run is not None)
         return live.run(settings, args)
 
     print(f"solving the lensing map once ({args.rings} rings) ...", end="", flush=True)
@@ -967,12 +969,92 @@ def add_view(p, default_output, allow_window):
     p.add_argument("--dpi", type=int, default=110, help="resolution of the written image")
 
 
+def group_options(parser, groups):
+    """Sort a subcommand's options under headings in its help.
+
+    The options are declared in the order they were added over time; this only
+    changes how --help lists them. A group given None takes whatever is left.
+    """
+    optionals = parser._optionals
+    remaining = [a for a in optionals._group_actions if a.dest != "help"]
+    for title, dests in groups:
+        group = parser.add_argument_group(title)
+        chosen = ([a for d in dests for a in remaining if a.dest == d] if dests is not None
+                  else list(remaining))
+        for action in chosen:
+            remaining.remove(action)
+            optionals._group_actions.remove(action)
+            group._group_actions.append(action)
+
+
+def explicit_options(parser, argv):
+    """The destinations of options actually typed, as opposed to defaulted."""
+    given = set()
+    words = [w.split("=", 1)[0] for w in argv if w.startswith("-")]
+    for action in parser._actions:
+        if any(opt in words for opt in action.option_strings):
+            given.add(action.dest)
+    return given
+
+
+def parser_for_spin():
+    parser = build_parser()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices["spin"]
+    return parser
+
+
+def widget_settings(args, parser, argv, from_run=False):
+    """Fold the config file and presets into the live view's options.
+
+    Precedence, highest first: options typed on the command line, the preset
+    opened at start, the config file, the built-in defaults.
+    """
+    from luminet import config
+
+    cfg, problem = config.load_config()
+    explicit = explicit_options(parser, argv)
+    if from_run:
+        explicit |= {"incl", "mass", "outer_edge"}
+    args.config = cfg
+    args.explicit = explicit
+    if "fps" not in explicit:
+        args.fps = int(cfg.get("fps", args.fps))
+    args.status = args.status or bool(cfg.get("status", False))
+    if args.no_pixels:
+        args.pixels, args.pixels_mode = False, "off"
+    elif args.pixels:
+        args.pixels_mode = "on"
+    else:
+        mode = cfg.get("pixels", "auto")
+        args.pixels_mode = "auto" if mode == "auto" else ("on" if mode is True else "off")
+        args.pixels = mode is True
+    args.events = False if args.no_events else bool(cfg.get("events", True))
+
+    presets, trouble = config.load_presets()
+    args.presets = presets
+    start = args.preset if args.preset is not None else cfg.get("start", "random")
+    args.preset_index = config.choose(presets, start)
+    if args.preset not in (None, "none", "random", "first") and args.preset_index is None:
+        print(f"no preset called {args.preset!r}; have: "
+              + ", ".join(p.get("name", "?") for p in presets), file=sys.stderr)
+    for message in (problem, trouble):
+        if message:
+            print(message, file=sys.stderr)
+            time.sleep(1.5)
+
+
 def build_parser():
+    from luminet import __version__
+
     parser = argparse.ArgumentParser(
         prog="luminet",
-        description="Simulate and visualise Schwarzschild black holes, after Luminet (1979). "
-                    "Run with no arguments for an interactive menu.",
+        description="A black hole for the terminal, after Luminet's 1979 plot, and the "
+                    "simulation behind it. `luminet spin` runs the live widget; with no "
+                    "arguments, an interactive menu.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("render", help="render a single black hole")
@@ -1073,7 +1155,11 @@ def build_parser():
                    help="sextant only: how bright a sample must be to light a subpixel")
     p.set_defaults(func=cmd_term)
 
-    p = sub.add_parser("spin", help="animate the disk turning, in the terminal")
+    p = sub.add_parser(
+        "spin", help="the live black hole widget for the terminal", usage="luminet spin [options]",
+        description="The live widget: Luminet's 1979 plot of a black hole, turning in real "
+                    "time. Opens with a preset from ~/.config/luminet; press h while it runs "
+                    "for keys. Options typed here win over the preset.")
     p.add_argument("--channel", default="flux",
                    choices=["flux", "both", "redshift"], help="what the colour means")
     p.add_argument("--frames", type=int, default=48, help="frames in one loop")
@@ -1113,7 +1199,16 @@ def build_parser():
                         "finer dots; plot1979 is the inked-dot look of the original figure")
     p.add_argument("--pixels", action="store_true",
                    help="plot1979 in real pixels, through the kitty graphics protocol "
-                        "(kitty or Ghostty); x toggles it while running")
+                        "(kitty or Ghostty); x toggles it while running. By default "
+                        "pixels are used when the terminal answers a graphics probe")
+    p.add_argument("--no-pixels", action="store_true", help="braille, even where pixels work")
+    p.add_argument("--preset", default=None,
+                   help="the preset to open with, by name, or random, first or none. "
+                        "Defaults to the config file's start setting")
+    p.add_argument("--status", action="store_true", help="show the status line from the start")
+    p.add_argument("--hud", action="store_true", help="plot1979: start with the observatory HUD")
+    p.add_argument("--no-events", action="store_true",
+                   help="plot1979: no probes or transmissions on their own")
     p.add_argument("--lines", default="",
                    help="plot1979: line families to start with, from radii, redshift, flux")
     p.add_argument("--line-style", default="solid",
@@ -1177,6 +1272,15 @@ def build_parser():
     p.add_argument("--gamma", type=float, default=0.75,
                    help="below 1 lifts the faint disk, above 1 deepens the blacks")
     p.set_defaults(func=cmd_spin)
+    group_options(p, [
+        ("the widget", ["preset", "pixels", "no_pixels", "status", "hud", "no_events", "fps",
+                        "palette", "bloom", "speed", "dust"]),
+        ("the view", ["incl", "mass", "acc", "outer_edge", "run", "width", "height",
+                      "incl_step", "edge_step", "mass_step", "cycle", "cycle_every", "seed"]),
+        ("plot1979 lines", ["lines", "line_style", "line_colour", "line_width", "iso_radii",
+                            "iso_ghost", "redshift_levels", "flux_levels"]),
+        ("tuning, other encodings and saving loops", None),
+    ])
 
     p = sub.add_parser("palettes", help="show the colour ramps on one frame")
     p.add_argument("names", nargs="*", help="which to show; a default set if omitted")
@@ -1211,6 +1315,7 @@ def main(argv=None):
         return menu()
 
     args = parser.parse_args(argv)
+    args.argv = argv
     if not hasattr(args, "func"):
         parser.print_help()
         return 0

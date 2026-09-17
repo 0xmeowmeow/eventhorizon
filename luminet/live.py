@@ -24,7 +24,12 @@ from collections import deque
 
 import numpy as np
 
-from luminet import cells, spin
+from luminet import cells, config, effects, spin
+
+# Tokens keys_in yields for focus reports, which kitty and Ghostty send once
+# asked to with CSI ? 1004 h. Neither can be typed as a single key.
+FOCUS_IN = "<focus-in>"
+FOCUS_OUT = "<focus-out>"
 
 # How each encoding subdivides a cell, and whether it can carry colour.
 ENCODINGS = {
@@ -75,6 +80,15 @@ HELP = [
     ("x", "1979: real pixels, through the kitty graphics protocol"),
     ("o", "1979: hide or show the dots"),
     ("y", "cycle everything, hands off"),
+    ("1-9  0", "presets: pick one, or 0 for a random one"),
+    ("+", "save the current look as a preset"),
+    ("X X", "delete the current preset (kept in deleted-presets.toml)"),
+    ("!", "1979: drop a probe in"),
+    ("@", "1979: receive a transmission"),
+    ("#", "1979: observatory HUD"),
+    ("$", "1979: warp jump"),
+    ("A", "1979: events on their own every few minutes"),
+    ("tab", "status line"),
     ("h  ?", "this list"),
 ]
 
@@ -130,6 +144,8 @@ def keys_in(text):
             j = i + 2
             while j < len(text) and not ("@" <= text[j] <= "~"):
                 j += 1
+            if text[i + 1] == "[" and j == i + 2 and j < len(text) and text[j] in "IO":
+                yield FOCUS_IN if text[j] == "I" else FOCUS_OUT
             i = j + 1
             continue
         yield ch
@@ -188,6 +204,171 @@ class Live:
         self.resized = True
         signal.signal(signal.SIGWINCH, self._winch)
 
+        # Widget behaviour: settings from the config file, the presets, the
+        # events, and whether the window has focus.
+        cfg = getattr(opts, "config", None) or {}
+        self.status_on = bool(getattr(opts, "status", False))
+        self.pixels_auto = getattr(opts, "pixels_mode", "off") == "auto"
+        self.unfocused_fps = float(cfg.get("unfocused_fps", 5))
+        self.focused = True
+        minutes = cfg.get("event_minutes", [4, 10])
+        self.effects = effects.Effects(
+            seed=self.seed, messages=cfg.get("transmissions") or None,
+            events=bool(getattr(opts, "events", True)),
+            event_minutes=(float(minutes[0]), float(minutes[-1])))
+        self.effects.hud = bool(getattr(opts, "hud", False))
+        self.presets = list(getattr(opts, "presets", None) or [])
+        self.preset_at = None
+        self.pending_delete = None
+        self.physics_moved = False
+        self.bank_done = None
+        self.bank_checked = 0.0
+        start = getattr(opts, "preset_index", None)
+        if start is not None and 0 <= start < len(self.presets):
+            self.preset_at = start
+            self.apply_look(self.presets[start], startup=True,
+                            keep=getattr(opts, "explicit", set()))
+
+    # ---------------------------------------------------------------- presets
+
+    # A preset's fields, and the command-line option each corresponds to. An
+    # option given on the command line wins over the preset opened at start.
+    LOOK_OPTIONS = {"palette": "palette", "bloom": "bloom", "speed": "speed",
+                    "dust": "dust", "lines": "lines", "line_style": "line_style",
+                    "line_colour": "line_colour", "line_width": "line_width",
+                    "vignette": "vignette", "scanlines": "scanlines", "incl": "incl",
+                    "mass": "mass", "disk": "outer_edge", "hud": "hud"}
+
+    def current_look(self):
+        s = self.settings
+        physics = self.goal if (self.using_bank and self.goal) else s
+        return {
+            "palette": PALETTE_CYCLE[self.palette_at], "glow": GLOW_CYCLE[self.glow_at],
+            "bloom": round(float(self.bloom), 3), "incl": round(float(physics["incl"]), 4),
+            "mass": round(float(physics["mass"]), 4),
+            "disk": round(float(physics["outer_edge"]), 2),
+            "speed": round(float(self.speed), 4), "dust": round(float(self.dust), 4),
+            "lines": sorted(self.families), "line_style": LINE_STYLES[self.line_style],
+            "line_colour": LINE_COLOURS[self.line_colour], "line_width": int(self.line_width),
+            "dots": bool(self.dots_on), "mask": bool(self.mask_on),
+            "vignette": bool(self.vignette_on), "scanlines": bool(self.scanlines_on),
+            "hud": bool(self.effects.hud),
+        }
+
+    def apply_look(self, look, startup=False, keep=()):
+        """Take on a preset's look. Fields it lacks are left as they are.
+
+        At start the physics is simply set, since nothing has been solved yet.
+        Later it glides there when the bank allows, or is solved again.
+        """
+        skip = {k for k, dest in self.LOOK_OPTIONS.items() if dest in keep}
+
+        def has(key):
+            return key in look and key not in skip
+
+        if has("palette") and look["palette"] in PALETTE_CYCLE:
+            self.palette_at = PALETTE_CYCLE.index(look["palette"])
+        if "glow" in look and look["glow"] in GLOW_CYCLE:
+            self.glow_at = GLOW_CYCLE.index(look["glow"])
+        if has("bloom"):
+            self.bloom = float(np.clip(float(look["bloom"]), 0.0, 2.0))
+        if has("lines"):
+            wanted = look["lines"]
+            if isinstance(wanted, str):
+                wanted = [w for w in wanted.split(",") if w]
+            self.families = {f for f in wanted if f in ("radii", "redshift", "flux")}
+        if has("line_style") and look["line_style"] in LINE_STYLES:
+            self.line_style = LINE_STYLES.index(look["line_style"])
+        if has("line_colour") and look["line_colour"] in LINE_COLOURS:
+            self.line_colour = LINE_COLOURS.index(look["line_colour"])
+        if has("line_width"):
+            self.line_width = int(np.clip(int(look["line_width"]), 1, 6))
+        for key, attr in (("dots", "dots_on"), ("mask", "mask_on"),
+                          ("vignette", "vignette_on"), ("scanlines", "scanlines_on")):
+            if has(key):
+                setattr(self, attr, bool(look[key]))
+        if has("hud"):
+            self.effects.hud = bool(look["hud"])
+        if has("dust"):
+            self.set_dust(float(look["dust"]), quiet=True)
+        if has("speed"):
+            self.speed = max(0.01, float(look["speed"]))
+            if not startup and self.mapping is not None:
+                self.rebuild_rates()
+
+        wanted = {}
+        for key, name, low, high in (("incl", "incl", 0.05, 1.55), ("mass", "mass", 0.25, 8.0),
+                                     ("disk", "outer_edge", 8.0, 200.0)):
+            if has(key):
+                wanted[name] = float(np.clip(float(look[key]), low, high))
+        if not wanted:
+            return
+        if startup or self.mapping is None:
+            self.settings.update(wanted)
+        elif self.using_bank and self.goal is not None:
+            self.goal.update(wanted)
+        elif any(abs(self.settings[k] - v) > 1e-9 for k, v in wanted.items()):
+            self.settings.update(wanted)
+            self.solve("the preset's view")
+            self.rebuild_rates()
+
+    def set_dust(self, value, quiet=False):
+        self.dust = float(np.clip(value, 0.0, 0.1))
+        for view in (getattr(self, "field", None),
+                     getattr(self.pixel_view, "field", None) if self.pixel_view else None):
+            if view is not None:
+                view.set_floor(self.dust)
+        if self.pixel_view is not None:
+            self.pixel_view.look = None          # dot colours follow brightness
+        if not quiet:
+            self.note = (f"dust {self.dust:.3f}: least chance of a dot wherever light "
+                         f"arrives", time.monotonic() + 2.5)
+
+    def load_preset(self, index):
+        preset = self.presets[index]
+        self.preset_at = index
+        self.apply_look(preset)
+        self.note = (f"preset {index + 1}: {preset.get('name', 'unnamed')}",
+                     time.monotonic() + 3.0)
+
+    def save_preset(self):
+        look = self.current_look()
+        look = {"name": config.unique_name(self.presets), **look}
+        self.presets.append(look)
+        try:
+            config.save_presets(self.presets)
+        except OSError as e:
+            self.presets.pop()
+            self.note = (f"could not save the preset: {e}", time.monotonic() + 5.0)
+            return
+        self.preset_at = len(self.presets) - 1
+        where = "" if self.preset_at >= 9 else f", key {self.preset_at + 1}"
+        self.note = (f"saved as preset '{look['name']}'{where}; rename it in "
+                     f"{config.presets_path()}", time.monotonic() + 5.0)
+
+    def delete_preset(self, now):
+        if self.preset_at is None or not self.presets:
+            self.note = ("no preset is in use to delete", now + 3.0)
+            return
+        at = self.preset_at
+        name = self.presets[at].get("name", "unnamed")
+        if not (self.pending_delete and self.pending_delete[0] == at
+                and now < self.pending_delete[1]):
+            self.pending_delete = (at, now + 3.0)
+            self.note = (f"X again to delete preset {at + 1} '{name}'", now + 3.0)
+            return
+        self.pending_delete = None
+        removed = self.presets.pop(at)
+        try:
+            config.archive_deleted(removed)
+            config.save_presets(self.presets)
+        except OSError as e:
+            self.presets.insert(at, removed)
+            self.note = (f"could not delete the preset: {e}", now + 5.0)
+            return
+        self.preset_at = None
+        self.note = (f"deleted '{name}'; a copy is in deleted-presets.toml", now + 4.0)
+
     # ------------------------------------------------------------ housekeeping
 
     def _winch(self, *_):
@@ -196,8 +377,10 @@ class Live:
     def fit(self):
         """Match the window. Called at the start and whenever it changes."""
         size = shutil.get_terminal_size((90, 28))
-        self.cols = self.o.width or max(24, size.columns - 1)
-        self.rows = self.o.height or max(8, size.lines - 2)
+        # The whole window. The status line and notes are drawn over the
+        # picture's bottom row rather than taking a row of their own.
+        self.cols = self.o.width or max(24, size.columns)
+        self.rows = self.o.height or max(8, size.lines)
         sub = ENCODINGS[self.encoding]
         self.w, self.h = self.cols * sub["x"], self.rows * sub["y"]
         # Measured every time the window changes: zooming the font sends the
@@ -333,7 +516,10 @@ class Live:
                 f"\r  {label}  [{'#' * filled}{'.' * (width - filled)}] {done}/{total}")
             sys.stdout.flush()
 
-        sys.stdout.write("\033[2J\033[H\n")
+        if getattr(self, "first_run", False):
+            self.first_run = False       # the notice stays up, with the bar under it
+        else:
+            sys.stdout.write("\033[2J\033[H\n")
         physics = self.physics()
         self.solved_for = self.encoding == "plot1979"
         rings = self.o.rings * 2 if self.solved_for else self.o.rings
@@ -367,6 +553,21 @@ class Live:
             self.rebuilding = None
             if generation == self.generation:
                 self.adopt(result)
+        if self.encoding == "plot1979" and self.projector is not None:
+            # The warp jump zooms by drawing moving frames at a scaled extent.
+            # Nothing about the map changes, so once it ends the still view
+            # built before it is right again - unless the view also moved.
+            zooming = self.effects.zoom() != 1.0
+            if zooming:
+                self.moving = True
+                self.generation += 1
+                self.rest_at = now + 0.25
+            elif getattr(self, "was_zooming", False) and not self.physics_moved:
+                self.moving = False
+                self.live = None
+            self.was_zooming = zooming
+            if zooming:
+                return
         if not (self.encoding == "plot1979" and self.using_bank and self.goal):
             return
         s, g = self.settings, self.goal
@@ -396,6 +597,7 @@ class Live:
                 self.resized = True
                 return
             self.projector.set_tables(mapping)
+            self.physics_moved = True
             self.moving = True
             self.generation += 1
             self.rest_at = now + 0.25
@@ -448,6 +650,7 @@ class Live:
             self.resized = True
             return
         self.projector = result["projector"]
+        self.physics_moved = False
         if "view" in result:
             if self.pixel_view is not None and self.pixel_view is not result["view"]:
                 self.pixel_view.transport.close()
@@ -532,12 +735,19 @@ class Live:
         vignette and scanlines. Those work on colours per cell, since each
         braille cell has one foreground and one background.
         """
+        self.effects.canvas = None
+        post = None
+        if self.effects.active():
+            def post(img, ext_x, ext_y):
+                self.effects.paint(effects.PixelCanvas(img, ext_x, ext_y, self.cols, self.rows),
+                                   self)
+
         if self.pixels_on and self.pixel_view is not None and self.moving \
                 and self.projector is not None:
             return self.pixel_view.frame_moving(
-                self.clock, self.rates, self.mapping, self.extent,
+                self.clock, self.rates, self.mapping, self.view_extent(),
                 PALETTE_CYCLE[self.palette_at], GLOW_CYCLE[self.glow_at], self.bloom,
-                self.mask_on, INK, PAPER, HOLE, dots_on=self.dots_on)
+                self.mask_on, INK, PAPER, HOLE, dots_on=self.dots_on, post=post)
 
         if self.pixels_on and self.pixel_view is not None:
             view = self.pixel_view
@@ -548,7 +758,7 @@ class Live:
                 view.lineset = self.make_lineset(view.field_for_lines, view.px_w, view.px_h)
             return view.frame(self.clock, self.rates, dots_on=self.dots_on,
                               lines=self.line_args() if self.families else None,
-                              line_width=self.line_width)
+                              line_width=self.line_width, post=post)
 
         source, hole = self.field, self.hole
         if self.moving and self.projector is not None:
@@ -560,7 +770,7 @@ class Live:
                                            cell_aspect=self.cell_aspect, stride=2)
             self.live.floor = self.dust
             source = self.live.measure(self.dust_parcels, self.clock, self.rates,
-                                       self.extent, self.projector)
+                                       self.view_extent(), self.projector)
             hole = self.shadow_coverage(source, self.mapping)
 
         if self.dots_on:
@@ -577,9 +787,9 @@ class Live:
             line_cells = (cell[ok], rgb[ok])
 
         name = PALETTE_CYCLE[self.palette_at]
-        effects = (self.bloom > 0 or self.scanlines_on or self.vignette_on
-                   or (self.mask_on and HOLE != PAPER))
-        if name == "ink" and line_cells is None and not effects:
+        styled = (self.bloom > 0 or self.scanlines_on or self.vignette_on
+                  or (self.mask_on and HOLE != PAPER) or self.effects.active())
+        if name == "ink" and line_cells is None and not styled:
             return cells.braille(lit, INK, PAPER)
 
         rows, cols = self.rows, self.cols
@@ -635,9 +845,19 @@ class Live:
         if self.scanlines_on:
             colours[1::2] *= 0.72
             backgrounds[1::2] *= 0.72
+        if self.effects.active():
+            self.effects.paint(effects.DotCanvas(lit, colours, backgrounds, source.ext_x,
+                                                 source.ext_y, cols, rows), self)
         return cells.braille(lit, INK, PAPER,
                              colours=np.clip(colours, 0, 255).astype(np.uint8),
                              backgrounds=np.clip(backgrounds, 0, 255).astype(np.uint8))
+
+    def view_extent(self):
+        """The framed extent, scaled while the warp jump zooms."""
+        zoom = self.effects.zoom()
+        if zoom == 1.0:
+            return self.extent
+        return (self.extent[0] * zoom, self.extent[1] * zoom)
 
     def make_lineset(self, field, width, height, mapping=None):
         from luminet import lines
@@ -751,15 +971,16 @@ class Live:
                 bits.append(f"glow {GLOW_CYCLE[self.glow_at]} {self.bloom:.2f}")
             if not self.mask_on:
                 bits.append("mask off")
-        text, until = getattr(self, "note", ("", 0.0))
-        if text and time.monotonic() < until:
-            return text
+        if not self.focused:
+            bits.append(f"unfocused {self.unfocused_fps:g}fps")
+        if self.preset_at is not None and self.preset_at < len(self.presets):
+            bits.append(f"preset {self.presets[self.preset_at].get('name', '?')}")
         if self.paused:
             bits.append("PAUSED")
         if self.encoding == "plot1979":
             if self.moving:
                 bits.append("moving")
-            done = self.bank.count()
+            done = self.bank_count()
             if done < 31:
                 bits.append(f"bank {done}/31")
         shown = getattr(self, "shown", ())
@@ -770,24 +991,89 @@ class Live:
             bits.append(f"{rate:4.1f}fps {cost:3.0f}ms/frame")
         return "  ".join(bits) + "   h for keys, q to quit"
 
+    def bank_count(self):
+        now = time.monotonic()
+        if self.bank_done is None or now - self.bank_checked > 1.0:
+            before = self.bank_done
+            self.bank_done = self.bank.count()
+            self.bank_checked = now
+            if before is not None and before < 31 <= self.bank_done:
+                self.note = ("lensing bank complete: tilt, zoom and mass now glide "
+                             "(after the next change)", now + 5.0)
+        return self.bank_done
+
+    def bottom_line(self):
+        """The one line of text under everything: a note, the bank, or the status."""
+        now = time.monotonic()
+        text, until = self.note
+        if text and now < until:
+            return text
+        if self.encoding == "plot1979" and self.bank_count() < 31:
+            from luminet import bank as bank_module
+
+            return (f"first run: building the lensing bank in the background, "
+                    f"{self.bank_done}/31 maps, kept in {bank_module.cache_dir().parent}; "
+                    f"tilt, zoom and mass step until it is done")
+        if self.status_on:
+            return self.status()
+        return ""
+
     # ----------------------------------------------------------------- input
 
     def handle(self, key):
         """Act on one keypress. Returns False to stop."""
         o, s = self.o, self.settings
 
+        now = time.monotonic()
         if key in ("q", "\x1b", "\x03"):
             return False
+        if key in (FOCUS_IN, FOCUS_OUT):
+            self.focused = key == FOCUS_IN
+            return True
+        if key == "\t":
+            self.status_on = not self.status_on
+            return True
+        if key.isdigit():
+            if not self.presets:
+                self.note = (f"no presets yet: + saves one, to {config.presets_path()}",
+                             now + 4.0)
+            elif key == "0":
+                choices = [i for i in range(len(self.presets)) if i != self.preset_at]
+                self.load_preset(int(self.effects.rng.choice(choices)) if choices else 0)
+            elif int(key) <= len(self.presets):
+                self.load_preset(int(key) - 1)
+            else:
+                self.note = (f"only {len(self.presets)} presets", now + 2.5)
+            return True
+        if key == "+":
+            self.save_preset()
+            return True
+        if key == "X":
+            self.delete_preset(now)
+            return True
+        if key in ("!", "@", "#", "$", "A"):
+            if self.encoding != "plot1979":
+                self.note = ("the probe, transmission, HUD and warp are plot1979 only", now + 3.0)
+            elif key == "!":
+                self.effects.launch_probe(self)
+                self.note = ("probe away: falling in from rest", now + 2.5)
+            elif key == "@":
+                self.effects.launch_transmission(self)
+                self.note = ("incoming transmission, one cuneiform sign per byte", now + 3.0)
+            elif key == "#":
+                self.effects.hud = not self.effects.hud
+            elif key == "$":
+                if self.projector is None:
+                    self.note = ("the warp needs the compiled path (numba); flash only", now + 3.0)
+                self.effects.launch_warp(self)
+            else:
+                self.effects.events = not self.effects.events
+                self.effects.next_event = None
+                self.note = ("events on their own: " + ("on" if self.effects.events else "off"),
+                             now + 2.5)
+            return True
         if self.encoding == "plot1979" and key in ("d", "D"):
-            self.dust = float(np.clip(self.dust + (0.004 if key == "D" else -0.004), 0.0, 0.1))
-            for view in (getattr(self, "field", None),
-                         getattr(self.pixel_view, "field", None) if self.pixel_view else None):
-                if view is not None:
-                    view.set_floor(self.dust)
-            if self.pixel_view is not None:
-                self.pixel_view.look = None          # dot colours follow brightness
-            self.note = (f"dust {self.dust:.3f}: least chance of a dot wherever light "
-                         f"arrives", time.monotonic() + 2.5)
+            self.set_dust(self.dust + (0.004 if key == "D" else -0.004))
             return True
         if self.encoding == "plot1979" and key in ("g", "f", "a"):
             what = {"g": "stars", "f": "edge softening", "a": "antialiasing"}[key]
@@ -934,8 +1220,17 @@ class Live:
     # ------------------------------------------------------------------- loop
 
     def run(self):
+        if self.encoding == "plot1979" and self.pixels_auto and not self.pixels_on:
+            from luminet import pixels
+
+            self.pixels_on = pixels.probe_graphics()
+        if self.encoding == "plot1979" and not self.bank.ready_for(self.settings["incl"]):
+            self.first_run_notice()
         self.solve()
         self.fit()
+        if not self.status_on:
+            self.note = ("h for keys, tab for the status line, q to quit",
+                         time.monotonic() + 4.0)
 
         interval = 1.0 / self.o.fps
         last = time.monotonic()
@@ -947,16 +1242,21 @@ class Live:
         self.costs = deque(maxlen=60)
         began = time.monotonic()
 
-        sys.stdout.write("\033[?25l")
+        # Focus reports, so the frame rate can drop while another window is in use.
+        sys.stdout.write("\033[?25l\033[?1004h")
+        self.text_rows = set()
         try:
             while True:
                 now = time.monotonic()
                 if not self.paused:
-                    self.clock += now - last
+                    self.clock += (now - last) * self.effects.time_direction()
                 last = now
 
-                self.advance(now, now - getattr(self, "_last_advance", now))
+                step = now - getattr(self, "_last_advance", now)
+                self.advance(now, step)
                 self._last_advance = now
+                if self.encoding == "plot1979" and self.mapping is not None:
+                    self.effects.step(self, now, step)
                 if self.cycling:
                     self.cycle()
                 if self.resized:
@@ -969,41 +1269,101 @@ class Live:
                 # Synchronised output: kitty and Ghostty hold the screen until the
                 # end marker, so a frame never appears half drawn. A torn frame
                 # reads as a stutter in motion however fast frames arrive.
-                sys.stdout.write("\033[?2026h\033[H" + pane + "\n")
+                sys.stdout.write("\033[?2026h\033[H" + pane)
+                over_pixels = self.encoding == "plot1979" and self.pixels_on \
+                    and self.pixel_view is not None
+                written = set()
+                texts = []
                 if self.show_help:
-                    for i, (key, what) in enumerate(HELP):
-                        sys.stdout.write(f"\033[{i + 2};3H\033[2K  {key:<8} {what}")
-                    sys.stdout.write(f"\033[H")
-                else:
-                    sys.stdout.write(f"\033[{self.rows + 1};1H\033[2K{self.status()}")
-                sys.stdout.write("\033[?2026l")
+                    for i, (key, what) in enumerate(HELP[:max(0, self.rows - 2)]):
+                        texts.append(f"\033[{i + 2};3H\033[0m\033[2K  {key:<10} {what}")
+                        written.add(i + 2)
+                line = self.bottom_line()
+                if line:
+                    texts.append(f"\033[{self.rows};1H\033[0m\033[2K{line[:self.cols - 1]}")
+                    written.add(self.rows)
+                if over_pixels:
+                    # Text over the picture is never overwritten by it, so lines
+                    # that held text last frame and not this one are blanked.
+                    for row in self.text_rows - written:
+                        sys.stdout.write(f"\033[{row};1H\033[0m\033[2K")
+                self.text_rows = written
+                if self.encoding == "plot1979" and (self.effects.active()
+                                                    or self.effects.last_cells
+                                                    or self.effects.readout[0]):
+                    sys.stdout.write(self.effects.overlay(self, clear=over_pixels))
+                sys.stdout.write("".join(texts) + "\033[0m\033[?2026l")
                 sys.stdout.flush()
                 drawn += 1
 
                 # Aim each frame at a fixed beat. Sleeping off whatever time is left
                 # lets every frame's own cost push the next one later, so the gaps
                 # between frames vary and even motion looks uneven.
+                # Out of focus, a low rate saves power; 0 keeps the full rate.
+                fps = self.o.fps if (self.focused or self.unfocused_fps <= 0) \
+                    else min(self.o.fps, self.unfocused_fps)
+                interval = 1.0 / fps
                 due = getattr(self, "_due", now) + interval
                 if due < time.monotonic() - interval:
                     due = time.monotonic()          # fell far behind: start a new beat
                 self._due = due
                 spare = due - time.monotonic()
                 if spare > 0:
-                    time.sleep(spare)
+                    # Wait on the keyboard rather than sleeping, so a key - or
+                    # the window regaining focus - is answered at once even at
+                    # a low frame rate.
+                    select.select([sys.stdin.fileno()], [], [], spare)
 
                 if not self.pump():
                     break
         except KeyboardInterrupt:
             pass
         finally:
-            if self.pixels_on or self.pixel_view is not None:
-                self.clear_images()
-            sys.stdout.write("\033[?25h\033[2J\033[H")
-            sys.stdout.flush()
+            self.restore_terminal()
 
         ran = time.monotonic() - began
         print(f"{drawn} frames in {ran:.0f}s = {drawn / max(ran, 1e-9):.1f} fps")
         return 0
+
+    def first_run_notice(self):
+        """Say what the first run is doing, before the first solve holds the screen."""
+        from luminet import bank as bank_module
+
+        lines = [
+            "First run: building the lensing bank.",
+            "",
+            "31 maps of where light from the disk lands, one for each tilt, are solved",
+            "once in the background and kept in " + str(bank_module.cache_dir().parent) + ".",
+            "It takes about a minute. Until it is done, tilt, zoom and mass move a step",
+            "at a time; everything else works straight away.",
+            "",
+            "Solving this view first:",
+        ]
+        size = shutil.get_terminal_size((90, 28))
+        top = max(1, size.lines // 2 - len(lines))
+        sys.stdout.write("\033[2J")
+        for i, text in enumerate(lines):
+            sys.stdout.write(f"\033[{top + i};{max(1, (size.columns - 76) // 2)}H{text}")
+        sys.stdout.write(f"\033[{top + len(lines) + 1};1H")
+        sys.stdout.flush()
+        self.first_run = True
+
+    def restore_terminal(self):
+        """Put the terminal back: images, focus reports, cursor, screen.
+
+        Called however the loop ends, including on a signal. If the window has
+        already gone, writing fails, and that is fine: there is nothing to restore.
+        """
+        try:
+            if self.pixels_on or self.pixel_view is not None:
+                self.clear_images()
+            sys.stdout.write("\033[0m\033[?1004l\033[?25h\033[2J\033[H")
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
+        finally:
+            if self.pixel_view is not None:
+                self.pixel_view.transport.close()
 
     def pump(self):
         """Handle everything that has been typed, without waiting for more.
@@ -1034,8 +1394,20 @@ def run(settings, opts):
         return 2
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
+
+    # Closing the window sends SIGHUP; a session ending or `kill` sends SIGTERM.
+    # Either becomes an ordinary exit, so the loop's cleanup runs: images
+    # deleted, temporary files removed, the terminal put back.
+    def stop(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, stop)
     try:
         tty.setcbreak(fd)
         return Live(settings, opts).run()
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+        except (termios.error, OSError):
+            pass
