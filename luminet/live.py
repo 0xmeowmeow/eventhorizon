@@ -68,6 +68,7 @@ HELP = [
     ("i", "1979: isoradials off, drawn, flowing"),
     ("k  K", "1979: glow palette, separate from the dots"),
     ("m", "1979: keep the glow out of the shadow"),
+    ("x", "1979: real pixels, through the kitty graphics protocol"),
     ("o", "1979: hide or show the dots"),
     ("y", "cycle everything, hands off"),
     ("h  ?", "this list"),
@@ -100,12 +101,27 @@ def keys_in(text):
     """The keypresses in a chunk of terminal input, with escape sequences removed.
 
     Arrow and function keys arrive as ESC followed by [ or O, parameters, and a
-    final byte from @ to ~. Those are dropped whole. A lone ESC is kept, since
-    on its own it is the escape key.
+    final byte from @ to ~. Replies from the terminal - graphics acknowledgements
+    among them - arrive as ESC _ or ESC ] strings. All of those are dropped
+    whole. A lone ESC is kept, since on its own it is the escape key.
     """
     i = 0
     while i < len(text):
         ch = text[i]
+        if ch == "\x1b" and i + 1 < len(text) and text[i + 1] in "_]P^":
+            # A string the terminal sends back - a graphics reply is ESC _ G ...
+            # ESC \ - running to ST or, for OSC, to BEL. Its ESC must not quit.
+            j = i + 2
+            while j < len(text):
+                if text[j] == "\x07":
+                    j += 1
+                    break
+                if text[j] == "\x1b" and j + 1 < len(text) and text[j + 1] == "\\":
+                    j += 2
+                    break
+                j += 1
+            i = j
+            continue
         if ch == "\x1b" and i + 1 < len(text) and text[i + 1] in "[O":
             j = i + 2
             while j < len(text) and not ("@" <= text[j] <= "~"):
@@ -135,6 +151,9 @@ class Live:
         self.dots_on = True
         self.glow_at = 0
         self.mask_on = True
+        self.pixels_on = bool(getattr(opts, "pixels", False))
+        self.transport_mode = None     # found by probing, the first time it is needed
+        self.pixel_view = None
         self.note = ("", 0.0)
         self.cycling = opts.cycle
         self.next_change = 0.0
@@ -183,7 +202,21 @@ class Live:
         self.stars = cells.starfield(self.w, self.h, self.o.star_density, self.seed + 5)
         self.stars_shown = cells.starfield(self.cols, self.rows * 2,
                                            self.o.star_density, self.seed + 5)
-        if self.encoding == "plot1979":
+        if self.encoding == "plot1979" and self.pixels_on:
+            from luminet import pixels
+
+            if self.transport_mode is None:
+                self.transport_mode = ("file" if pixels.probe_file_transport()
+                                       else "direct")
+            if self.pixel_view is not None:
+                self.pixel_view.transport.close()
+            orders = (0,) if self.o.no_ghost else (0, 1)
+            self.pixel_view = pixels.PixelView(
+                self.mapping, self.extent, self.rates, self.projector, orders,
+                self.cols, self.rows, self.cell_px, pixels.Transport(self.transport_mode),
+                seed=self.seed, infall=self.o.infall, gamma=self.o.ink_gamma,
+                grain=getattr(self.o, "pixel_grain", 4))
+        elif self.encoding == "plot1979":
             # No tracer: the dots are the material, so the motion shows without
             # one. Many parcels, because most of them are faint and thinly kept.
             self.dust = spin.Parcels(self.mapping["radii"], count=int(self.w * self.h * 2.5),
@@ -330,6 +363,14 @@ class Live:
         vignette and scanlines. Those work on colours per cell, since each
         braille cell has one foreground and one background.
         """
+        if self.pixels_on and self.pixel_view is not None:
+            view = self.pixel_view
+            view.restyle(PALETTE_CYCLE[self.palette_at], GLOW_CYCLE[self.glow_at],
+                         self.bloom, self.mask_on, self.vignette_on, self.scanlines_on,
+                         INK, PAPER, HOLE)
+            return view.frame(self.clock, self.rates, dots_on=self.dots_on,
+                              overlay=OVERLAYS[self.overlay], line_rgb=LINE, ink=INK)
+
         if self.dots_on:
             lit = self.field.frame(self.clock, self.rates).copy()
         else:
@@ -404,6 +445,14 @@ class Live:
                              colours=np.clip(colours, 0, 255).astype(np.uint8),
                              backgrounds=np.clip(backgrounds, 0, 255).astype(np.uint8))
 
+    def clear_images(self):
+        """Remove any picture placed with the graphics protocol."""
+        sys.stdout.write("\033_Ga=d,d=A,q=2\033\\")
+        sys.stdout.flush()
+        if self.pixel_view is not None:
+            self.pixel_view.transport.close()
+            self.pixel_view = None
+
     def shadow_coverage(self, sub=6):
         """How much of each cell lies inside the black hole's shadow, 0 to 1.
 
@@ -466,6 +515,8 @@ class Live:
             bits.append("cycling")
         if self.encoding == "plot1979":
             bits.append("compiled" if self.projector is not None else "numpy")
+            if self.pixels_on:
+                bits.append(f"pixels by {self.transport_mode or '?'}")
             if self.overlay:
                 bits.append(f"isoradials {OVERLAYS[self.overlay]}")
             if not self.dots_on:
@@ -501,8 +552,8 @@ class Live:
             self.note = (f"{what} is for half, sextant and braille; plot1979 has none",
                          time.monotonic() + 3.0)
             return True
-        if self.encoding != "plot1979" and key in ("i", "o", "k", "K", "m"):
-            self.note = ("isoradials, hiding dots, glow palette and mask are plot1979 only",
+        if self.encoding != "plot1979" and key in ("i", "o", "k", "K", "m", "x"):
+            self.note = ("isoradials, hiding dots, glow palette, mask and pixels are plot1979 only",
                          time.monotonic() + 3.0)
             return True
         elif key == " ":
@@ -540,6 +591,7 @@ class Live:
             self.seed += 1
             self.resized = True
         elif key in ("e", "E"):
+            self.clear_images()
             at = ENCODING_CYCLE.index(self.encoding)
             self.encoding = ENCODING_CYCLE[(at + (1 if key == "e" else -1)) % len(ENCODING_CYCLE)]
             if (self.encoding == "plot1979") != getattr(self, "solved_for", False):
@@ -553,6 +605,11 @@ class Live:
             self.glow_at = (self.glow_at + (1 if key == "k" else -1)) % len(GLOW_CYCLE)
         elif key == "m":
             self.mask_on = not self.mask_on
+        elif key == "x":
+            self.pixels_on = not self.pixels_on
+            if not self.pixels_on:
+                self.clear_images()
+            self.resized = True
         elif key == "y":
             self.cycling = not self.cycling
             self.next_change = 0.0
@@ -666,6 +723,8 @@ class Live:
         except KeyboardInterrupt:
             pass
         finally:
+            if self.pixels_on or self.pixel_view is not None:
+                self.clear_images()
             sys.stdout.write("\033[?25h\033[2J\033[H")
             sys.stdout.flush()
 

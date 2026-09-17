@@ -15,9 +15,12 @@ the fast path is active.
 - **Frame rate.** Settled: 30fps is the default and costs about a third of a
   core at full screen, since brightness per cell is now measured once per map
   and window instead of every frame.
-- **Ghostty glow.** A custom shader that post-processes what the app draws
-  (bloom, phosphor, CRT). Discussed as a later layer; Ghostty shaders get only
-  the terminal image, time and size, so no physics can go there.
+- **Ghostty glow.** A custom shader post-processing what the app draws. Parked.
+- **Pixel mode (x, --pixels) is unverified on a real screen.** Checked only by
+  decoding what the app sends. Whether Ghostty accepts the /dev/shm file route
+  is found by probing at startup; if not it falls back to half resolution sent
+  inline. Full screen costs about 55% of a core at 30fps, against 34% for
+  braille. Dots are sparser than the plate; --pixel-grain and --ink-gamma tune it.
 
 ## Known rough edges
 

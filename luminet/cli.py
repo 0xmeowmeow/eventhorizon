@@ -1111,6 +1111,12 @@ def build_parser():
                    choices=["half", "sextant", "braille", "plot1979"],
                    help="half-block is full colour; sextant and braille trade colour for "
                         "finer dots; plot1979 is the inked-dot look of the original figure")
+    p.add_argument("--pixels", action="store_true",
+                   help="plot1979 in real pixels, through the kitty graphics protocol "
+                        "(kitty or Ghostty); x toggles it while running")
+    p.add_argument("--pixel-grain", type=int, default=4,
+                   help="pixels: size in pixels of the patches dot density is decided "
+                        "over. Smaller is denser and finer, and slower")
     p.add_argument("--no-compile", action="store_true",
                    help="use the plain numpy path even if numba is installed")
     p.add_argument("--dot-gamma", type=float, default=0.5,

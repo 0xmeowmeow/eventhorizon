@@ -147,6 +147,62 @@ if available:
                         lit[k] = True
 
 
+    @nb.njit(cache=True)
+    def _paint(ring, jitter, angle0, luck, radii, rates, b_tab, has, phase,
+               ext_x, ext_y, grid_w, grid_h, chance, cell_rgb, img, dot):
+        """Paint this frame's dots straight into an RGB image, at pixel resolution.
+
+        The decision to show a parcel is the same one _place makes, against a
+        coarse grid's chance. What changes is where the dot goes: at the
+        parcel's own position in pixels, not snapped to a character cell, so at
+        full resolution each dot is a few pixels of ink.
+        """
+        px_h = img.shape[0]
+        px_w = img.shape[1]
+        n = ring.shape[0]
+        nr = radii.shape[0]
+        na = b_tab.shape[2]
+        two_pi = 2.0 * np.pi
+        for i in range(n):
+            rg = ring[i]
+            up = rg + 1 if rg + 1 < nr else nr - 1
+            fr = jitter[i]
+            ang = (angle0[i] + rates[rg] * phase) % two_pi
+            col = ang / two_pi * (na - 1)
+            floor_col = np.floor(col)
+            lo = int(floor_col) % na
+            hi = (lo + 1) % na
+            ft = col - floor_col
+            sa = np.sin(ang)
+            ca = np.cos(ang)
+            for o in range(2):
+                if not has[o]:
+                    continue
+                b = ((1.0 - fr) * ((1.0 - ft) * b_tab[o, rg, lo] + ft * b_tab[o, rg, hi])
+                     + fr * ((1.0 - ft) * b_tab[o, up, lo] + ft * b_tab[o, up, hi]))
+                if not np.isfinite(b):
+                    continue
+                xf = (b * sa / ext_x + 1.0) / 2.0
+                yf = (b * ca / ext_y + 1.0) / 2.0
+                gc = int(xf * (grid_w - 1))
+                gr = int(yf * (grid_h - 1))
+                if gc < 0 or gc >= grid_w or gr < 0 or gr >= grid_h:
+                    continue
+                c = gr * grid_w + gc
+                if luck[i] >= chance[o, c]:
+                    continue
+                px = int(xf * (px_w - 1))
+                py = int(yf * (px_h - 1))
+                for dy in range(dot):
+                    for dx in range(dot):
+                        yy = py + dy
+                        xx = px + dx
+                        if 0 <= yy < px_h and 0 <= xx < px_w:
+                            img[yy, xx, 0] = cell_rgb[c, 0]
+                            img[yy, xx, 1] = cell_rgb[c, 1]
+                            img[yy, xx, 2] = cell_rgb[c, 2]
+
+
 class Projector:
     """Holds the lensing map in the flat form the compiled loop reads.
 
@@ -184,6 +240,14 @@ class Projector:
         keep = flat >= 0
         luck = np.repeat(parcels.luck, 2)
         return flat[keep], self._flux.ravel()[keep], luck[keep]
+
+    def paint(self, parcels, phase, rates, ext_x, ext_y, grid_w, grid_h, chance,
+              cell_rgb, img, dot):
+        """Paint this frame's dots into img, at pixel resolution."""
+        _paint(parcels.ring, parcels.jitter, parcels.angle0, parcels.luck, self.radii,
+               np.ascontiguousarray(rates, dtype=np.float64), self.b, self.has,
+               float(phase), float(ext_x), float(ext_y), int(grid_w), int(grid_h),
+               chance, cell_rgb, img, int(dot))
 
     def place(self, parcels, phase, rates, ext_x, ext_y, width, height, chance, lit):
         """Light this frame's dots from a precomputed per-cell chance."""
