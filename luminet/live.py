@@ -20,6 +20,7 @@ import sys
 import termios
 import time
 import tty
+from collections import deque
 
 import numpy as np
 
@@ -129,6 +130,11 @@ class Live:
                                      seed=self.seed, infall=self.o.infall, clumps=0,
                                      spread="log")
         self.resized = False
+        # A new grid or a new map makes the old timings about something else,
+        # and a re-solve pause would drag the rate down for a second.
+        for window in (getattr(self, "shown", None), getattr(self, "costs", None)):
+            if window is not None:
+                window.clear()
         sys.stdout.write("\033[2J\033[H")
 
     def physics(self):
@@ -309,6 +315,12 @@ class Live:
             bits.append("compiled" if self.projector is not None else "numpy")
         if self.paused:
             bits.append("PAUSED")
+        shown = getattr(self, "shown", ())
+        if len(shown) > 1:
+            span = shown[-1] - shown[0]
+            rate = (len(shown) - 1) / span if span > 0 else 0.0
+            cost = 1000 * sum(self.costs) / len(self.costs)
+            bits.append(f"{rate:4.1f}fps {cost:3.0f}ms/frame")
         return "  ".join(bits) + "   h for keys, q to quit"
 
     # ----------------------------------------------------------------- input
@@ -418,6 +430,11 @@ class Live:
         interval = 1.0 / self.o.fps
         last = time.monotonic()
         drawn = 0
+        # The last second or so of frames: when each was shown, and how long
+        # each took to make. The rate is capped by --fps, so the time a frame
+        # costs is the number that actually differs between modes.
+        self.shown = deque(maxlen=60)
+        self.costs = deque(maxlen=60)
         began = time.monotonic()
 
         sys.stdout.write("\033[?25l")
@@ -433,7 +450,10 @@ class Live:
                 if self.resized:
                     self.fit()
 
+                made = time.monotonic()
                 pane = self.draw()
+                self.costs.append(time.monotonic() - made)
+                self.shown.append(now)
                 sys.stdout.write("\033[H" + pane + "\n")
                 if self.show_help:
                     for i, (key, what) in enumerate(HELP):
