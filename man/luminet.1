@@ -1,0 +1,42 @@
+.TH LUMINET 1 "September 2026" "eventhorizon 1.0.0" "User Commands"
+.SH NAME
+luminet \- simulate and draw Schwarzschild black holes
+.SH SYNOPSIS
+.B luminet
+[\fIcommand\fR] [\fIoptions\fR]
+.SH DESCRIPTION
+.B luminet
+renders black holes with thin accretion disks after Luminet (1979), and keeps
+a notebook of runs so settings can be compared and revisited. With no
+arguments it opens a prompt-based menu.
+.SH COMMANDS
+.TP
+.B render
+Render a single black hole.
+.TP
+.B sweep
+Render a range of one setting side by side.
+.TP
+.B explain
+Describe what each setting is and changes.
+.TP
+.B log show vary note
+List, redraw, vary and annotate recorded runs.
+.TP
+.B term
+Draw a black hole in the terminal.
+.TP
+.B spin
+The live widget; the same as
+.BR eventhorizon (1).
+.TP
+.B animate
+Write a looping animation.
+.PP
+Run
+.B luminet
+.I command
+.B \-\-help
+for each command's options.
+.SH SEE ALSO
+.BR eventhorizon (1)

@@ -11,3 +11,15 @@ docs/source/autoapi**
 
 # notebook images are redrawn from notebook/runs.json on demand
 notebook/*.png
+
+# package builds
+debian/.debhelper/
+debian/eventhorizon/
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/.home/
+packaging/arch/*.pkg.tar.zst
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/*.tar.gz

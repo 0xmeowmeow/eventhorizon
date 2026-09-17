@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+export PYBUILD_NAME=eventhorizon
+# The tests write lensing maps and settings; keep them out of any real home.
+export PYBUILD_BEFORE_TEST=cp -r {dir}/tests {build_dir}/
+export PYBUILD_AFTER_TEST=rm -rf {build_dir}/tests
+export PYBUILD_TEST_ARGS=-q tests
+export HOME=$(CURDIR)/debian/.home
+export NUMBA_CACHE_DIR=$(CURDIR)/debian/.home/numba
+
+%:
+	dh $@ --buildsystem=pybuild

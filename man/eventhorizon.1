@@ -1,0 +1,80 @@
+.TH EVENTHORIZON 1 "September 2026" "eventhorizon 1.0.0" "User Commands"
+.SH NAME
+eventhorizon, eh \- black hole widget for the terminal
+.SH SYNOPSIS
+.B eventhorizon
+[\fIoptions\fR]
+.br
+.B eh
+[\fIoptions\fR]
+.SH DESCRIPTION
+.B eventhorizon
+draws Luminet's 1979 plot of a black hole live in the terminal: a thin
+accretion disk around a Schwarzschild black hole, its light bent by gravity,
+turning at true Keplerian rates so the picture never repeats.
+.PP
+In terminals that answer the kitty graphics protocol, such as kitty and
+Ghostty, it draws in real pixels; elsewhere it uses braille dots. It fills the
+window and follows it when resized.
+.PP
+The first run solves a bank of 31 lensing maps in the background, about a
+minute, kept in \fI~/.cache/eventhorizon\fR. Until then, tilt, zoom and mass
+move a step at a time.
+.SH KEYS
+.TP
+.B h ?
+List every key.
+.TP
+.B q Esc
+Quit.
+.TP
+.B 1\-9 0 < >
+Pick a preset, a random one, or step through them all.
+.TP
+.B +
+Save the current look as a preset.
+.TP
+.B X X
+Delete the current preset; a copy is kept in \fIdeleted\-presets.toml\fR.
+.TP
+.B [ ] \- = , .
+Inclination, disk size and mass.
+.TP
+.B p b k
+Palette, bloom and glow palette.
+.TP
+.B ! @ # $ I A
+A probe, a transmission, the observatory HUD, a warp jump (again to return),
+invert, and events on their own.
+.TP
+.B Tab
+Show or hide the status line.
+.SH OPTIONS
+Run
+.B eventhorizon \-\-help
+for the full list, grouped. Options typed on the command line win over the
+preset opened at start.
+.TP
+.BI \-\-preset " name"
+Open with a preset by name, or \fBrandom\fR, \fBfirst\fR or \fBnone\fR.
+.TP
+.B \-\-pixels \-\-no\-pixels
+Force pixels or braille instead of detecting.
+.TP
+.B \-\-version
+Print the version.
+.SH FILES
+.TP
+.I ~/.config/eventhorizon/config.toml
+Settings, written once with comments and never rewritten: start preset, frame
+rates focused and unfocused, status line, pixels, events, transmissions.
+.TP
+.I ~/.config/eventhorizon/presets.toml
+Presets, managed by the app.
+.TP
+.I ~/.cache/eventhorizon/
+The bank of lensing maps.
+.SH SEE ALSO
+.BR luminet (1)
+.SH AUTHORS
+Meow\-Ludo, on luminet by Bjorge Meulemeester.

@@ -1,0 +1,39 @@
+# Maintainer: Meow-Ludo <meow at meow-meow dot io>
+pkgname=eventhorizon
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="A black hole for the terminal: Luminet's 1979 plot, live, in kitty and Ghostty"
+arch=('any')
+url="https://github.com/0xmeowmeow/eventhorizon"
+license=('MIT')
+depends=('python' 'python-numpy' 'python-scipy' 'python-matplotlib' 'python-pillow')
+makedepends=('python-build' 'python-installer' 'python-hatchling')
+checkdepends=('python-pytest' 'python-numba')
+optdepends=('python-numba: compiled frames, about half the CPU'
+            'kitty: real pixels through the kitty graphics protocol'
+            'ghostty: real pixels through the kitty graphics protocol'
+            'python-textual: the luminet tui')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  # The tests write lensing maps and settings; keep them out of any real home.
+  local home="$srcdir/check-home"
+  mkdir -p "$home"
+  HOME="$home" NUMBA_CACHE_DIR="$home/numba" PYTHONPATH="$PWD" python -m pytest -q tests
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 man/eventhorizon.1 "$pkgdir/usr/share/man/man1/eventhorizon.1"
+  install -Dm644 man/luminet.1 "$pkgdir/usr/share/man/man1/luminet.1"
+  ln -s eventhorizon.1.gz "$pkgdir/usr/share/man/man1/eh.1.gz"
+}

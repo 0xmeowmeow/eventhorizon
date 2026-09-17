@@ -1,0 +1,49 @@
+Source: eventhorizon
+Section: utils
+Priority: optional
+Maintainer: Meow-Ludo <meow@meow-meow.io>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-sequence-python3,
+ pybuild-plugin-pyproject,
+ python3-all,
+ python3-hatchling,
+ python3-matplotlib,
+ python3-pil,
+ python3-numba,
+ python3-numpy,
+ python3-pytest,
+ python3-scipy,
+Standards-Version: 4.7.2
+Homepage: https://github.com/0xmeowmeow/eventhorizon
+Vcs-Browser: https://github.com/0xmeowmeow/eventhorizon
+Vcs-Git: https://github.com/0xmeowmeow/eventhorizon.git
+Rules-Requires-Root: no
+
+Package: eventhorizon
+Architecture: all
+Depends:
+ python3-matplotlib,
+ python3-pil,
+ python3-numpy,
+ python3-scipy,
+ ${misc:Depends},
+ ${python3:Depends},
+Recommends:
+ python3-numba,
+Suggests:
+ kitty,
+ python3-textual,
+Description: black hole widget for the terminal
+ eventhorizon draws Jean-Pierre Luminet's 1979 plot of a black hole live in
+ the terminal: a thin accretion disk around a Schwarzschild black hole, with
+ its light bent by gravity, turning at true Keplerian rates so the picture
+ never repeats.
+ .
+ In terminals that support the kitty graphics protocol, such as kitty and
+ Ghostty, it draws in real pixels; elsewhere it uses braille dots. It has
+ presets, a status line, events such as a probe falling in and a cuneiform
+ transmission, and lowers its frame rate when its window loses focus.
+ .
+ It is built on luminet, a Python library for simulating Schwarzschild black
+ holes, which is included along with its luminet command.
